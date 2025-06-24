@@ -2,15 +2,3 @@
 backend/node_modules/
 frontend/node_modules/
 
-# Logs
-logs
-*.log
-
-# Environment variables
-.env
-
-# OS-specific
-.DS_Store
-
-# Build
-dist/
