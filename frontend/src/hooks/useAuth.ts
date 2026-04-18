@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { authAPI } from '@/lib/api';
 import type { User } from '@/types';
+import { clearPersistedAuth } from '@/lib/auth-storage';
 
 interface AuthStore {
   user: User | null;
@@ -15,7 +16,7 @@ interface AuthStore {
 
 export const useAuth = create<AuthStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       user: null,
       token: null,
       isLoading: false,
@@ -53,9 +54,7 @@ export const useAuth = create<AuthStore>()(
       },
 
       logout: () => {
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('token');
-        }
+        clearPersistedAuth();
         set({ user: null, token: null });
       },
 
@@ -65,6 +64,10 @@ export const useAuth = create<AuthStore>()(
     }),
     {
       name: 'auth-storage',
+      partialize: (state) => ({
+        user: state.user,
+        token: state.token,
+      }),
     }
   )
 );

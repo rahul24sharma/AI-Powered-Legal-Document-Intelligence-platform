@@ -1,13 +1,9 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import './globals.css';
-import { Providers } from './providers';
-
-const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'AI Legal Intelligence',
-  description: 'AI-powered legal document analysis platform',
+  title: 'ClaudeIQ',
+  description: 'ClaudeIQ for professional legal document analysis and review',
 };
 
 export default function RootLayout({
@@ -16,11 +12,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
-        <Providers>
-          {children}
-        </Providers>
+    <html lang="en" className="scroll-smooth" suppressHydrationWarning>
+      <body className="min-h-screen antialiased" suppressHydrationWarning>
+        {children}
       </body>
     </html>
   );

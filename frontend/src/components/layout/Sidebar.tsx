@@ -3,51 +3,42 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { 
-  LayoutDashboard, 
-  FileText, 
-  Upload,
-  BarChart3,
-  Settings 
-} from 'lucide-react';
-
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Documents', href: '/documents', icon: FileText },
-  { name: 'Upload', href: '/upload', icon: Upload },
-  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
-  { name: 'Settings', href: '/settings', icon: Settings },
-];
+import { dashboardNavigation } from '@/config/navigation';
 
 export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <div className="w-64 bg-gray-50 border-r min-h-screen">
-      <div className="p-6">
-        <nav className="space-y-2">
-          {navigation.map((item) => {
+    <aside className="hidden w-56 shrink-0 flex-col border-r border-border bg-sidebar lg:flex">
+      <div className="px-4 py-5">
+        <p className="mb-3 px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Menu
+        </p>
+        <nav className="flex flex-col gap-1">
+          {dashboardNavigation.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.href;
-            
+            const isActive =
+              pathname === item.href ||
+              (item.href !== '/dashboard' && pathname.startsWith(item.href));
+
             return (
               <Link
                 key={item.name}
                 href={item.href}
                 className={cn(
-                  'flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors',
+                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground'
                 )}
               >
-                <Icon className="mr-3 h-5 w-5" />
+                <Icon className="h-5 w-5 shrink-0 opacity-90" />
                 {item.name}
               </Link>
             );
           })}
         </nav>
       </div>
-    </div>
+    </aside>
   );
 }

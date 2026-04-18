@@ -8,10 +8,12 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
 
+/** Merge conditional Tailwind class names without duplicating conflicting utilities. */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** Format raw byte counts into human-readable file sizes. */
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
@@ -20,14 +22,22 @@ export function formatFileSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-export function formatDate(date: string): string {
+/** Format timestamps for compact list views or more detailed detail views. */
+export function formatDate(date: string, options?: { includeTime?: boolean; longMonth?: boolean }): string {
   return new Date(date).toLocaleDateString('en-US', {
     year: 'numeric',
-    month: 'short',
+    month: options?.longMonth ? 'long' : 'short',
     day: 'numeric',
+    ...(options?.includeTime
+      ? {
+          hour: '2-digit',
+          minute: '2-digit',
+        }
+      : {}),
   });
 }
 
+/** Return semantic text/background colors for clause risk chips. */
 export function getRiskColor(riskLevel: string): string {
   switch (riskLevel?.toUpperCase()) {
     case 'LOW':

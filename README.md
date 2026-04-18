@@ -1,4 +1,4 @@
-# ⚖️ AI-Powered Legal Document Intelligence Platform
+# ⚖️ ClaudeIQ
 
 This project is a full-stack AI platform that automates the analysis of legal documents. It leverages AI and vector search to extract clauses, assess risks, provide plain-English summaries, and offer contextual recommendations — streamlining legal workflows for firms, startups, and enterprise users.
 

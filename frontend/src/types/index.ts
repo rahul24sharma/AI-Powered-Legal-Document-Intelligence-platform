@@ -9,6 +9,8 @@ export interface User {
     id: string;
     filename: string;
     originalName: string;
+    fileUrl?: string;
+    downloadUrl?: string | null;
     fileSize: number;
     mimeType: string;
     status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
@@ -47,3 +49,27 @@ export interface User {
     explanation: string;
     suggestions: string[];
   }
+
+export interface SimilarDocumentScoreBreakdown {
+  vector: number;
+  keyword: number;
+  recency: number;
+  hybridRank: number;
+}
+
+export interface SimilarDocument extends Document {
+  relevanceScore: number;
+  similarity: number;
+  scoreBreakdown: SimilarDocumentScoreBreakdown;
+  rankingMethod: string;
+}
+
+export interface SimilarDocumentsPayload {
+  similarDocuments: SimilarDocument[];
+  count: number;
+  ranking?: {
+    retrievalTopK: number;
+    responseLimit: number;
+    method: string;
+  };
+}

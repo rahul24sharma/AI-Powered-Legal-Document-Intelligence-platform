@@ -1,58 +1,62 @@
 "use client";
 
-import { Button } from '@/components/ui/button';
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
-  DropdownMenuTrigger 
-} from '@/components/ui/dropdown-menu';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@/hooks/useAuth';
-import { User, LogOut, Settings } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
+
+const MobileNavLazy = dynamic(
+  () => import('@/components/layout/MobileNav').then((mod) => mod.MobileNav),
+  {
+    loading: () => (
+      <Button
+        variant="outline"
+        size="icon"
+        className="shrink-0 lg:hidden"
+        aria-label="Open menu"
+        disabled
+      />
+    ),
+  }
+);
+
+const NavbarAccountMenuLazy = dynamic(
+  () => import('@/components/layout/NavbarAccountMenu').then((mod) => mod.NavbarAccountMenu),
+  {
+    loading: () => (
+      <Button variant="ghost" size="icon" className="rounded-full" aria-label="Account menu" disabled />
+    ),
+  }
+);
 
 export function Navbar() {
-  const { user, logout } = useAuth();
-  const router = useRouter();
-
-  const handleLogout = () => {
-    logout();
-    router.push('/login');
-  };
+  const { user } = useAuth();
 
   return (
-    <nav className="border-b bg-white">
-      <div className="flex h-16 items-center px-6">
-        <div className="flex items-center space-x-4">
-          <h1 className="text-xl font-bold text-gray-900">
-            AI Legal Intelligence
-          </h1>
-        </div>
-        
-        <div className="ml-auto flex items-center space-x-4">
-          <span className="text-sm text-gray-600">
-            Welcome, {user?.name}
+    <header className="sticky top-0 z-40 border-b border-border bg-card/90 backdrop-blur-md supports-[backdrop-filter]:bg-card/75">
+      <div className="flex h-14 items-center gap-3 px-4 sm:h-16 sm:px-6">
+        <MobileNavLazy />
+
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Link
+            href="/dashboard"
+            className="truncate text-lg font-semibold tracking-tight text-foreground sm:text-xl"
+          >
+            ClaudeIQ
+          </Link>
+          <span className="hidden text-sm text-muted-foreground sm:inline">
+            Contract Intelligence
           </span>
-          
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <User className="h-5 w-5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem>
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleLogout}>
-                <LogOut className="mr-2 h-4 w-4" />
-                Logout
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <span className="hidden max-w-[200px] truncate text-sm text-muted-foreground md:inline">
+            {user?.name}
+          </span>
+
+          <NavbarAccountMenuLazy />
         </div>
       </div>
-    </nav>
+    </header>
   );
 }
