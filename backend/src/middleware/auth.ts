@@ -1,9 +1,7 @@
 // src/middleware/auth.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -14,6 +12,7 @@ export interface AuthRequest extends Request {
   };
 }
 
+/** Validate the bearer token and attach the current user to the request. */
 export const authenticateToken = async (
   req: AuthRequest, 
   res: Response, 

@@ -1,27 +1,16 @@
+import 'dotenv/config';
 // src/routes/upload.ts
-import express, { Response, NextFunction } from 'express';
+import express, { Response } from 'express';
 import multer from 'multer';
-import path from 'path';
-import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { processDocument } from '../services/documentProcessor';
+import { prisma } from '../lib/prisma';
+import { deleteStoredDocument, saveUploadedDocument } from '../services/documentStorage';
+import { enqueueDocumentProcessing } from '../services/documentProcessingQueue';
 
 const router = express.Router();
-const prisma = new PrismaClient();
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, process.env.UPLOAD_DIR || './uploads');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760') // 10MB default
   },
@@ -35,20 +24,59 @@ const upload = multer({
   }
 });
 
+function uploadSingleDocument(req: AuthRequest, res: Response): Promise<void> {
+  return new Promise((resolve, reject) => {
+    upload.single('document')(req, res, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function getUploadErrorMessage(error: unknown): string {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return 'File size must be less than 10MB';
+    }
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Upload failed';
+}
+
 // Upload document
-router.post('/', authenticateToken, upload.single('document'), async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+router.post('/', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
+  let storedFile: { storedFilename: string; fileUrl: string } | null = null;
+  let documentId: string | null = null;
+
   try {
-    if (!req.file) {
+    await uploadSingleDocument(req, res);
+
+    if (!req.file?.buffer) {
       res.status(400).json({ message: 'No file uploaded' });
       return;
     }
 
+    storedFile = await saveUploadedDocument({
+      fileBuffer: req.file.buffer,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      userId: req.user!.id,
+    });
+
     // Create document record
     const document = await prisma.document.create({
       data: {
-        filename: req.file.filename,
+        filename: storedFile.storedFilename,
         originalName: req.file.originalname,
-        fileUrl: `/uploads/${req.file.filename}`,
+        fileUrl: storedFile.fileUrl,
         fileSize: req.file.size,
         mimeType: req.file.mimetype,
         userId: req.user!.id,
@@ -56,9 +84,9 @@ router.post('/', authenticateToken, upload.single('document'), async (req: AuthR
         status: 'PENDING'
       }
     });
+    documentId = document.id;
 
-    // Start processing in background (we'll implement this next)
-    processDocument(document.id).catch(console.error);
+    await enqueueDocumentProcessing(document.id);
 
     res.status(201).json({
       message: 'Document uploaded successfully',
@@ -70,7 +98,37 @@ router.post('/', authenticateToken, upload.single('document'), async (req: AuthR
     });
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ message: 'Upload failed' });
+
+    if (error instanceof multer.MulterError) {
+      res.status(400).json({ message: getUploadErrorMessage(error) });
+      return;
+    }
+
+    if (error instanceof Error && error.message.startsWith('Invalid file type')) {
+      res.status(400).json({ message: error.message });
+      return;
+    }
+
+    if (documentId) {
+      try {
+        await prisma.document.delete({ where: { id: documentId } });
+      } catch (cleanupError) {
+        console.error('Upload DB cleanup error:', cleanupError);
+      }
+    }
+
+    if (storedFile) {
+      try {
+        await deleteStoredDocument({
+          filename: storedFile.storedFilename,
+          fileUrl: storedFile.fileUrl,
+        });
+      } catch (cleanupError) {
+        console.error('Upload cleanup error:', cleanupError);
+      }
+    }
+
+    res.status(503).json({ message: 'Upload failed. Processing could not be scheduled.' });
   }
 });
 
