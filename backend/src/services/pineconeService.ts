@@ -1,3 +1,4 @@
+import 'dotenv/config';
 // backend/src/services/pineconeService.ts
 import { Pinecone } from '@pinecone-database/pinecone';
 import OpenAI from 'openai';
@@ -6,11 +7,24 @@ const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+const openAiKey = process.env.OPENAI_API_KEY;
+const hasLikelyOpenAiKey =
+  !!openAiKey && !openAiKey.startsWith('sk-ant-') && !openAiKey.startsWith('claude-');
+
+const openai = hasLikelyOpenAiKey
+  ? new OpenAI({
+      apiKey: openAiKey!,
+    })
+  : null;
 
 const INDEX_NAME = process.env.PINECONE_INDEX_NAME || 'legal-documents';
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+const EMBEDDING_DIM = Number(process.env.EMBEDDING_DIM || 1024);
+const EMBEDDING_PROVIDER = (
+  process.env.EMBEDDING_PROVIDER ||
+  (process.env.OLLAMA_BASE_URL ? 'ollama' : hasLikelyOpenAiKey ? 'openai' : 'local')
+).toLowerCase();
+const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 
 // Initialize Pinecone index
 export async function initializePinecone() {
@@ -26,20 +40,78 @@ export async function initializePinecone() {
 
 // Create embedding for text
 export async function createEmbedding(text: string): Promise<number[]> {
+  const input = text.substring(0, 8000);
   try {
-    console.log('📊 Creating embedding with OpenAI...');
-    const response = await openai.embeddings.create({
-      model: "text-embedding-3-small", // Reliable OpenAI model
-      input: text.substring(0, 8000), // Limit text length
-      dimensions: 1024 // Match your Pinecone index
-    });
-    
-    console.log(`✅ Created embedding with ${response.data[0].embedding.length} dimensions`);
-    return response.data[0].embedding;
+    if (EMBEDDING_PROVIDER === 'openai') {
+      if (!openai) throw new Error('OPENAI_API_KEY missing');
+      console.log('📊 Creating embedding with OpenAI...');
+      const response = await openai.embeddings.create({
+        model: process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small',
+        input,
+        dimensions: EMBEDDING_DIM,
+      });
+      return normalizeEmbedding(response.data[0].embedding, EMBEDDING_DIM);
+    }
+
+    if (EMBEDDING_PROVIDER === 'ollama') {
+      console.log(`📊 Creating embedding with Ollama (${OLLAMA_EMBED_MODEL})...`);
+      const res = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: OLLAMA_EMBED_MODEL,
+          prompt: input,
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Ollama embeddings error ${res.status}: ${t}`);
+      }
+      const data = (await res.json()) as { embedding?: number[] };
+      if (!Array.isArray(data.embedding) || data.embedding.length === 0) {
+        throw new Error('No embedding returned by Ollama');
+      }
+      return normalizeEmbedding(data.embedding, EMBEDDING_DIM);
+    }
+
+    console.log('📊 Creating deterministic local embedding...');
+    return deterministicLocalEmbedding(input, EMBEDDING_DIM);
   } catch (error) {
     console.error('❌ Failed to create embedding:', error);
+    if (EMBEDDING_PROVIDER !== 'local') {
+      console.log('🔄 Falling back to deterministic local embedding...');
+      return deterministicLocalEmbedding(input, EMBEDDING_DIM);
+    }
     throw error;
   }
+}
+
+function normalizeEmbedding(values: number[], dim: number): number[] {
+  if (values.length === dim) return values;
+  if (values.length > dim) return values.slice(0, dim);
+  const out = new Array(dim).fill(0);
+  for (let i = 0; i < values.length; i++) out[i] = values[i];
+  return out;
+}
+
+function deterministicLocalEmbedding(text: string, dim: number): number[] {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const vec = new Array(dim).fill(0);
+  for (const tok of tokens) {
+    let h = 2166136261;
+    for (let i = 0; i < tok.length; i++) {
+      h ^= tok.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    const idx = Math.abs(h) % dim;
+    vec[idx] += 1;
+  }
+  const norm = Math.sqrt(vec.reduce((s, x) => s + x * x, 0)) || 1;
+  return vec.map((x) => x / norm);
 }
 
 // Store document in Pinecone

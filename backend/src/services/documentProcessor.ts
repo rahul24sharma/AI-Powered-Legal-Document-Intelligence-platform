@@ -1,22 +1,18 @@
-import fs from 'fs';
-import path from 'path';
-import pdf from 'pdf-parse';
-import mammoth from 'mammoth';
-import { PrismaClient, ClauseType } from '@prisma/client';
-import { 
-  analyzeDocumentWithContext,
-  analyzeDocument
-} from './aiAnalyzer';
+import { ClauseType } from '@prisma/client';
+import { analyzeDocumentWithContext } from './aiAnalyzer';
 
-import { 
-  storeDocumentEmbedding, 
-  findSimilarDocuments, 
+import {
+  storeDocumentEmbedding,
+  findSimilarDocuments,
   detectDocumentType,
   storeClauseEmbeddings,
-  updateDocumentWithAnalysis
+  updateDocumentWithAnalysis,
 } from './pineconeService';
+import { rankSimilarDocuments } from './similarityRanking';
+import { prisma } from '../lib/prisma';
+import { extractTextFromStoredDocument } from './documentTextExtractor';
 
-const prisma = new PrismaClient();
+const CONTEXT_SIMILAR_RETRIEVAL_K = 18;
 
 const VALID_CLAUSE_TYPES: ClauseType[] = [
   'TERMINATION',
@@ -33,29 +29,39 @@ export async function processDocument(documentId: string): Promise<void> {
   try {
     console.log(`📄 Processing document ${documentId}...`);
 
-    await prisma.document.update({
-      where: { id: documentId },
+    const lock = await prisma.document.updateMany({
+      where: {
+        id: documentId,
+        status: { in: ['PENDING', 'FAILED'] },
+      },
       data: { status: 'PROCESSING' }
     });
 
+    if (lock.count === 0) {
+      const existing = await prisma.document.findUnique({
+        where: { id: documentId },
+        select: { status: true },
+      });
+      console.log(`⏭️ Skipping document ${documentId}; current status is ${existing?.status ?? 'missing'}`);
+      return;
+    }
+
     const document = await prisma.document.findUnique({
       where: { id: documentId },
-      include: { user: true }
+      include: { user: true, analysis: { select: { id: true } } }
     });
 
     if (!document) throw new Error('Document not found');
-
-    const filePath = path.join(process.env.UPLOAD_DIR || './uploads', document.filename);
-    let extractedText = '';
-
-    if (document.mimeType === 'application/pdf') {
-      const dataBuffer = fs.readFileSync(filePath);
-      const pdfData = await pdf(dataBuffer);
-      extractedText = pdfData.text;
-    } else if (document.mimeType.includes('word')) {
-      const result = await mammoth.extractRawText({ path: filePath });
-      extractedText = result.value;
+    if (document.analysis) {
+      console.log(`⏭️ Document ${documentId} already has analysis; marking completed`);
+      await prisma.document.update({
+        where: { id: documentId },
+        data: { status: 'COMPLETED' }
+      });
+      return;
     }
+
+    const extractedText = await extractTextFromStoredDocument(document);
 
     if (!extractedText.trim()) throw new Error('No text could be extracted from document');
 
@@ -69,13 +75,39 @@ export async function processDocument(documentId: string): Promise<void> {
       organizationId: document.organizationId || undefined
     });
 
-    const similarDocuments = await findSimilarDocuments(
-      extractedText, 
-      document.userId, 
-      3
+    const pineconeMatches = await findSimilarDocuments(
+      extractedText,
+      document.userId,
+      CONTEXT_SIMILAR_RETRIEVAL_K
     );
 
-    console.log(`🔍 Found ${similarDocuments.length} similar documents for context`);
+    const filtered = pineconeMatches.filter((m) => m.id !== documentId);
+    const dbForRank = await prisma.document.findMany({
+      where: {
+        id: { in: filtered.map((m) => m.id) },
+        userId: document.userId,
+      },
+      select: {
+        id: true,
+        originalName: true,
+        createdAt: true,
+        analysis: {
+          select: { overallSummary: true, riskScore: true },
+        },
+      },
+    });
+
+    const rankedContext = rankSimilarDocuments(filtered, extractedText, dbForRank, {
+      limit: 3,
+    });
+
+    const similarDocuments = rankedContext.map((r) => ({
+      id: r.id,
+      similarity: r.similarity,
+      metadata: r.metadata,
+    }));
+
+    console.log(`🔍 Found ${similarDocuments.length} ranked similar documents for context`);
 
     const analysis = await analyzeDocumentWithContext(extractedText, similarDocuments);
 
@@ -86,12 +118,8 @@ export async function processDocument(documentId: string): Promise<void> {
         overallSummary: analysis.overallSummary,
         plainEnglish: analysis.plainEnglish,
         keyTerms: analysis.keyTerms,
-        riskFactors: {
-          create: analysis.riskFactors
-        },
-        recommendations: {
-          create: analysis.recommendations
-        },
+        riskFactors: analysis.riskFactors,
+        recommendations: analysis.recommendations,
         clauses: {
           create: analysis.clauses.map((clause: any) => ({
             type: VALID_CLAUSE_TYPES.includes(clause.type)

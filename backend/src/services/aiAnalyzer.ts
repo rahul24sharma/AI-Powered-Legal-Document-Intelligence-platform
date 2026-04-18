@@ -1,13 +1,62 @@
+import 'dotenv/config';
 // backend/src/services/aiAnalyzer.ts
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+type AnalysisResponse = {
+  riskScore: number;
+  overallSummary: string;
+  plainEnglish: string;
+  keyTerms: string[];
+  riskFactors: Array<{
+    factor: string;
+    severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    explanation: string;
+  }>;
+  recommendations: Array<{
+    category: string;
+    suggestion: string;
+    priority: 'LOW' | 'MEDIUM' | 'HIGH';
+  }>;
+  clauses: Array<{
+    type:
+      | 'TERMINATION'
+      | 'PAYMENT'
+      | 'LIABILITY'
+      | 'CONFIDENTIALITY'
+      | 'INTELLECTUAL_PROPERTY'
+      | 'DISPUTE_RESOLUTION'
+      | 'FORCE_MAJEURE'
+      | 'OTHER';
+    content: string;
+    riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    explanation: string;
+    suggestions: string[];
+    position: { page: number; section: string };
+  }>;
+};
+
+const openAiKey = process.env.OPENAI_API_KEY;
+const hasLikelyOpenAiKey =
+  !!openAiKey && !openAiKey.startsWith('sk-ant-') && !openAiKey.startsWith('claude-');
+
+const openai = hasLikelyOpenAiKey
+  ? new OpenAI({
+      apiKey: openAiKey,
+    })
+  : null;
+
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+/** Default: local Ollama (open-source, no per-token billing). Set LLM_PROVIDER=openai|anthropic only if you opt in. */
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || 'ollama').toLowerCase();
+const OLLAMA_MODEL = process.env.OLLAMA_LLM_MODEL || 'llama3.2:3b-instruct-q4_K_M';
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+const DOC_SNIPPET_CHARS = LLM_PROVIDER === 'ollama' ? 4000 : 6000;
 
 // Enhanced analysis with context from similar documents
 export async function analyzeDocumentWithContext(
-  documentText: string, 
+  documentText: string,
   similarDocuments: any[] = []
 ) {
   let contextPrompt = '';
@@ -80,42 +129,33 @@ The JSON should have this exact structure:
 }
 
 Document to analyze:
-${documentText.substring(0, 6000)}
+${documentText.substring(0, DOC_SNIPPET_CHARS)}
 `;
 
   try {
-    console.log('🤖 Sending enhanced request to OpenAI with context...');
+    console.log(`🤖 Sending analysis request via provider: ${LLM_PROVIDER}`);
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a legal document analysis expert. Always respond with valid JSON only."
-        },
-        {
-          role: "user",
-          content: analysisPrompt
-        }
-      ],
-      max_tokens: 2500,
-      temperature: 0.3
-    });
+    let analysisText = '';
+    if (LLM_PROVIDER === 'ollama') {
+      analysisText = await runOllamaAnalysis(analysisPrompt);
+    } else if (LLM_PROVIDER === 'openai') {
+      analysisText = await runOpenAIAnalysis(analysisPrompt);
+    } else if (LLM_PROVIDER === 'anthropic') {
+      analysisText = await runAnthropicAnalysis(analysisPrompt);
+    } else if (LLM_PROVIDER === 'mock') {
+      throw new Error('mock provider — use fallback');
+    } else {
+      throw new Error(`Unsupported LLM provider "${LLM_PROVIDER}"`);
+    }
 
-    const analysisText = response.choices[0].message.content;
-    console.log('🤖 Enhanced AI response received');
-
-    if (!analysisText) throw new Error('Empty response from OpenAI');
-
+    if (!analysisText) throw new Error('Empty response from LLM provider');
     const rawAnalysis = parseAIResponse(analysisText);
     const validatedAnalysis = validateAnalysisResponse(rawAnalysis);
-    console.log('✅ Successfully parsed enhanced AI analysis with context');
+    console.log('✅ Successfully parsed AI analysis');
     return validatedAnalysis;
-
   } catch (error) {
-    console.error('❌ Enhanced OpenAI API error:', error);
-    console.log('🔄 Falling back to standard analysis...');
-    return await analyzeDocument(documentText);
+    console.error('❌ LLM analysis error:', error);
+    throw new Error('Document analysis failed');
   }
 }
 
@@ -133,11 +173,142 @@ export async function analyzeDocument(documentText: string) {
   };
 }
 
-// Dummy functions to be replaced by your actual parser/validator logic
-function parseAIResponse(text: string): any {
-  return JSON.parse(text);
+async function runOpenAIAnalysis(prompt: string): Promise<string> {
+  if (!openai) throw new Error('OPENAI_API_KEY missing');
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+    max_tokens: 2200,
+    temperature: 0.2,
+  });
+  return response.choices[0].message.content || '';
 }
 
-function validateAnalysisResponse(obj: any): any {
-  return obj;
+async function runAnthropicAnalysis(prompt: string): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY missing');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1800,
+      temperature: 0.2,
+      system: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Anthropic API error ${res.status}: ${t}`);
+  }
+  const data = (await res.json()) as {
+    content?: Array<{ type: string; text?: string }>;
+  };
+  const text = data.content?.find((c) => c.type === 'text')?.text || '';
+  return text;
+}
+
+async function runOllamaAnalysis(prompt: string): Promise<string> {
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      format: 'json',
+      stream: false,
+      options: {
+        temperature: 0.2,
+        num_predict: 1400,
+      },
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Ollama API error ${res.status}: ${t}`);
+  }
+  const data = (await res.json()) as { message?: { content?: string } };
+  return data.message?.content || '';
+}
+
+function parseAIResponse(text: string): any {
+  const cleaned = text.trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Could not parse JSON from AI response');
+    return JSON.parse(match[0]);
+  }
+}
+
+function validateAnalysisResponse(obj: any): AnalysisResponse {
+  return {
+    riskScore: Number.isFinite(obj?.riskScore) ? Math.max(0, Math.min(100, Number(obj.riskScore))) : 50,
+    overallSummary: String(obj?.overallSummary || 'No summary generated.'),
+    plainEnglish: String(obj?.plainEnglish || 'No plain-English summary generated.'),
+    keyTerms: Array.isArray(obj?.keyTerms) ? obj.keyTerms.map(String).slice(0, 20) : [],
+    riskFactors: Array.isArray(obj?.riskFactors)
+      ? obj.riskFactors.map((r: any) => ({
+          factor: String(r?.factor || 'General risk'),
+          severity: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(String(r?.severity))
+            ? r.severity
+            : 'MEDIUM',
+          explanation: String(r?.explanation || ''),
+        }))
+      : [],
+    recommendations: Array.isArray(obj?.recommendations)
+      ? obj.recommendations.map((r: any) => ({
+          category: String(r?.category || 'General'),
+          suggestion: String(r?.suggestion || ''),
+          priority: ['LOW', 'MEDIUM', 'HIGH'].includes(String(r?.priority)) ? r.priority : 'MEDIUM',
+        }))
+      : [],
+    clauses: Array.isArray(obj?.clauses)
+      ? obj.clauses.map((c: any) => ({
+          type: [
+            'TERMINATION',
+            'PAYMENT',
+            'LIABILITY',
+            'CONFIDENTIALITY',
+            'INTELLECTUAL_PROPERTY',
+            'DISPUTE_RESOLUTION',
+            'FORCE_MAJEURE',
+            'OTHER',
+          ].includes(String(c?.type))
+            ? c.type
+            : 'OTHER',
+          content: String(c?.content || ''),
+          riskLevel: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(String(c?.riskLevel))
+            ? c.riskLevel
+            : 'MEDIUM',
+          explanation: String(c?.explanation || ''),
+          suggestions: Array.isArray(c?.suggestions) ? c.suggestions.map(String) : [],
+          position: {
+            page: Number.isFinite(c?.position?.page) ? Number(c.position.page) : 1,
+            section: String(c?.position?.section || 'Unknown'),
+          },
+        }))
+      : [],
+  };
 }
