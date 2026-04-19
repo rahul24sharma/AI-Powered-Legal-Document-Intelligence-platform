@@ -26,7 +26,7 @@ Legal review is repetitive, slow, and easy to get wrong when teams are juggling 
 
 ## Key Features
 
-- AI-powered legal analysis with provider support for Ollama, OpenAI, and Anthropic
+- AI-powered legal analysis with provider support for Groq, Ollama, OpenAI, and Anthropic
 - Pinecone vector search for semantic similarity
 - PostgreSQL + Prisma for document and analysis data
 - Redis-backed token bucket rate limiting
@@ -138,7 +138,12 @@ REDIS_URL=redis://localhost:6379
 PINECONE_API_KEY=your_pinecone_key
 PINECONE_INDEX_NAME=legal-documents
 
-LLM_PROVIDER=ollama
+# Groq is the fastest free-tier option for demos when you set GROQ_API_KEY.
+LLM_PROVIDER=groq
+GROQ_API_KEY=your_groq_key
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=llama-3.1-8b-instant
+
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_LLM_MODEL=llama3.2:3b-instruct-q4_K_M
 OLLAMA_EMBED_MODEL=nomic-embed-text
@@ -193,6 +198,7 @@ NEXT_PUBLIC_API_URL=http://localhost:5050
 
 - The frontend uses a custom auth flow, not NextAuth.
 - The backend can fall back to in-memory behavior if Redis is unavailable, but Redis is the preferred setup.
+- Groq is the preferred fast free-tier LLM path for demos; Ollama remains the local/offline option.
 - Local file storage is supported as a fallback, but Supabase Storage is the better production path.
 - The project is currently optimized for local demo presentation and interview walkthroughs.
 

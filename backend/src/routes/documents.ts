@@ -9,6 +9,7 @@ import { prisma } from '../lib/prisma';
 import { extractTextFromStoredDocument } from '../services/documentTextExtractor';
 import { tryCreateDocumentAccessUrl } from '../services/documentStorage';
 import { logger } from '../lib/logger';
+import { cancelDocumentProcessing } from '../services/documentProcessor';
 
 const router = express.Router();
 
@@ -249,6 +250,64 @@ router.get('/:id/status', authenticateToken, async (req: AuthRequest, res: Respo
   } catch (error) {
     logger.error('Fetch document status error:', error);
     res.status(500).json({ message: 'Failed to fetch document status' });
+  }
+});
+
+/** Cancel an in-progress document review. */
+router.post('/:id/cancel', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const document = await prisma.document.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.user!.id,
+      },
+      include: {
+        analysis: {
+          include: {
+            clauses: true,
+          },
+        },
+      },
+    });
+
+    if (!document) {
+      res.status(404).json({ message: 'Document not found' });
+      return;
+    }
+
+    if (!['PENDING', 'PROCESSING'].includes(document.status)) {
+      res.status(409).json({ message: 'Document is no longer cancellable' });
+      return;
+    }
+
+    await prisma.document.update({
+      where: { id: document.id },
+      data: { status: 'CANCELLED' },
+    });
+
+    cancelDocumentProcessing(document.id);
+
+    const cancelledDocument = await prisma.document.findUnique({
+      where: { id: document.id },
+      include: {
+        analysis: {
+          include: {
+            clauses: true,
+          },
+        },
+      },
+    });
+
+    if (!cancelledDocument) {
+      res.status(404).json({ message: 'Document not found' });
+      return;
+    }
+
+    const enrichedDocument = await enrichDocumentWithDownloadUrl(cancelledDocument);
+    res.json({ message: 'Document processing cancelled', document: enrichedDocument });
+  } catch (error) {
+    logger.error('Cancel document error:', error);
+    res.status(500).json({ message: 'Failed to cancel document processing' });
   }
 });
 

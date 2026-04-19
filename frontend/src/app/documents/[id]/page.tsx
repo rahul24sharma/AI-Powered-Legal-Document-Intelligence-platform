@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Printer,
   CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { documentsAPI } from '@/lib/api';
 import { getAxiosErrorMessage } from '@/lib/api-errors';
@@ -50,12 +51,19 @@ export default function DocumentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const documentId = params.id as string;
   const documentStatus = document?.status;
   const hasAnalysis = Boolean(document?.analysis);
   const isProcessing = documentStatus === 'PROCESSING';
   const isCompleted = documentStatus === 'COMPLETED' && hasAnalysis;
+  const isCancelled = documentStatus === 'CANCELLED';
+  const analysisClauses = document?.analysis?.clauses ?? [];
+  const topRiskClauses = [...analysisClauses].sort((a, b) => {
+    const riskWeight = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
+    return riskWeight[b.riskLevel] - riskWeight[a.riskLevel];
+  }).slice(0, 5);
 
   /** Narrow unknown polling payloads into the lightweight status shape this page expects. */
   const isDocumentStatusPayload = (
@@ -97,7 +105,7 @@ export default function DocumentDetailPage() {
 
   useEffect(() => {
     if (!documentId || !documentStatus) return;
-    if (documentStatus === 'COMPLETED' || documentStatus === 'FAILED') return;
+    if (documentStatus === 'COMPLETED' || documentStatus === 'FAILED' || documentStatus === 'CANCELLED') return;
 
     const unsubscribe = documentsAPI.subscribeToDocumentStatus(documentId, {
       onMessage: (payload) => {
@@ -123,6 +131,22 @@ export default function DocumentDetailPage() {
 
     return unsubscribe;
   }, [documentId, documentStatus, fetchDocument, hasAnalysis]);
+
+  const handleCancelProcessing = useCallback(async () => {
+    if (!document || cancelling) return;
+
+    try {
+      setCancelling(true);
+      setError('');
+      const response = await documentsAPI.cancelDocumentProcessing(document.id);
+      setDocument(response.document);
+      setRefreshing(false);
+    } catch (err: unknown) {
+      setError(getAxiosErrorMessage(err, 'Failed to cancel document processing'));
+    } finally {
+      setCancelling(false);
+    }
+  }, [cancelling, document]);
 
   if (loading) {
     return (
@@ -214,6 +238,25 @@ export default function DocumentDetailPage() {
         </Card>
       )}
 
+      {isProcessing && (
+        <Card className="border-destructive/20 bg-destructive/5 shadow-sm">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <XCircle className="mt-0.5 h-5 w-5 text-destructive" />
+              <div className="space-y-1">
+                <p className="font-medium text-destructive">Need to stop this review?</p>
+                <p className="text-sm text-muted-foreground">
+                  You can cancel the analysis while it is running. The document will stop processing and keep its current state.
+                </p>
+              </div>
+            </div>
+            <Button variant="destructive" size="sm" onClick={() => void handleCancelProcessing()} disabled={cancelling}>
+              {cancelling ? 'Cancelling…' : 'Cancel analysis'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {isCompleted && (
         <Card className="border-emerald-200 bg-emerald-50/80 shadow-sm dark:border-emerald-900/40 dark:bg-emerald-950/20">
           <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
@@ -261,7 +304,8 @@ export default function DocumentDetailPage() {
                     document.status === 'COMPLETED' && 'text-emerald-600 dark:text-emerald-400',
                     document.status === 'PROCESSING' && 'animate-spin text-primary',
                     document.status === 'FAILED' && 'text-destructive',
-                    !['COMPLETED', 'PROCESSING', 'FAILED'].includes(document.status) && 'text-primary'
+                    document.status === 'CANCELLED' && 'text-muted-foreground',
+                    !['COMPLETED', 'PROCESSING', 'FAILED', 'CANCELLED'].includes(document.status) && 'text-primary'
                   )}
                 />
                 <span>Properties</span>
@@ -300,8 +344,8 @@ export default function DocumentDetailPage() {
           {document.analysis && (
             <Card id="document-analysis">
               <CardHeader>
-                <CardTitle>Analysis</CardTitle>
-                <CardDescription>Risk assessment and summaries</CardDescription>
+                <CardTitle>Risk analysis</CardTitle>
+                <CardDescription>Risk assessment, clause extraction, and summaries</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div>
@@ -326,6 +370,69 @@ export default function DocumentDetailPage() {
                     />
                   </div>
                 </div>
+
+                {topRiskClauses.length > 0 && (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Top risky clauses</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        These are the clause areas most likely to need negotiation or legal review.
+                      </p>
+                    </div>
+                    <div className="grid gap-3">
+                      {topRiskClauses.map((clause, index) => (
+                        <div
+                          key={clause.id || `${clause.type}-${index}`}
+                          className="rounded-xl border border-border/70 bg-muted/30 p-4 shadow-sm"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge
+                                  variant="secondary"
+                                  className={cn(
+                                    'font-normal',
+                                    clause.riskLevel === 'CRITICAL' &&
+                                      'border-destructive/30 bg-destructive/10 text-destructive',
+                                    clause.riskLevel === 'HIGH' &&
+                                      'border-amber-300/60 bg-amber-100 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
+                                    clause.riskLevel === 'MEDIUM' &&
+                                      'border-amber-200/70 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
+                                    clause.riskLevel === 'LOW' &&
+                                      'border-emerald-200/70 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
+                                  )}
+                                >
+                                  {clause.type.replace(/_/g, ' ')}
+                                </Badge>
+                                <Badge variant="outline" className="font-normal">
+                                  {clause.riskLevel} risk
+                                </Badge>
+                              </div>
+                              <p className="text-sm leading-relaxed text-foreground">{clause.content}</p>
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Clause #{index + 1}
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Why it matters</p>
+                              <p className="mt-1 text-sm leading-relaxed">{clause.explanation}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Suggested checks</p>
+                              <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
+                                {clause.suggestions.slice(0, 3).map((suggestion, suggestionIndex) => (
+                                  <li key={`${suggestion}-${suggestionIndex}`}>• {suggestion}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <p className="mb-2 text-sm font-medium text-muted-foreground">Summary</p>
@@ -383,6 +490,20 @@ export default function DocumentDetailPage() {
             </Card>
           )}
 
+          {isCancelled && (
+            <Card className="border-muted-foreground/20 bg-muted/40">
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <XCircle className="h-4 w-4" />
+                  Processing cancelled
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  The review was stopped before completion. You can upload it again if you want to restart analysis.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Actions</CardTitle>
@@ -404,6 +525,18 @@ export default function DocumentDetailPage() {
                 <Button variant="outline" className="w-full justify-start" size="sm" disabled>
                   <Download className="mr-2 h-4 w-4" />
                   Download
+                </Button>
+              )}
+              {['PENDING', 'PROCESSING'].includes(document.status) && (
+                <Button
+                  variant="destructive"
+                  className="w-full justify-start"
+                  size="sm"
+                  onClick={() => void handleCancelProcessing()}
+                  disabled={cancelling}
+                >
+                  <XCircle className="mr-2 h-4 w-4" />
+                  {cancelling ? 'Cancelling…' : 'Cancel analysis'}
                 </Button>
               )}
             </CardContent>

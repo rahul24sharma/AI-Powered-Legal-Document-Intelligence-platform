@@ -129,6 +129,7 @@ enum ProcessingStatus {
   PROCESSING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum ClauseType {

@@ -40,6 +40,9 @@ const openAiKey = process.env.OPENAI_API_KEY;
 const hasLikelyOpenAiKey =
   !!openAiKey && !openAiKey.startsWith('sk-ant-') && !openAiKey.startsWith('claude-');
 
+const groqKey = process.env.GROQ_API_KEY;
+const hasLikelyGroqKey = !!groqKey;
+
 const openai = hasLikelyOpenAiKey
   ? new OpenAI({
       apiKey: openAiKey,
@@ -47,28 +50,221 @@ const openai = hasLikelyOpenAiKey
   : null;
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-/** Default: local Ollama (open-source, no per-token billing). Set LLM_PROVIDER=openai|anthropic only if you opt in. */
-const LLM_PROVIDER = (process.env.LLM_PROVIDER || 'ollama').toLowerCase();
+const GROQ_BASE_URL = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
+/** Default: Groq when a Groq key is present, otherwise local Ollama. */
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || (hasLikelyGroqKey ? 'groq' : 'ollama')).toLowerCase();
 const OLLAMA_MODEL = process.env.OLLAMA_LLM_MODEL || 'llama3.2:3b-instruct-q4_K_M';
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 
-const DOC_SNIPPET_CHARS = LLM_PROVIDER === 'ollama' ? 1800 : 3600;
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 8000);
+const DOC_SNIPPET_CHARS = LLM_PROVIDER === 'ollama' ? 1100 : 3600;
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 25000);
+const OLLAMA_RETRY_TIMEOUT_MS = Number(process.env.OLLAMA_RETRY_TIMEOUT_MS || 40000);
 
 // Enhanced analysis with context from similar documents
 export async function analyzeDocumentWithContext(
   documentText: string,
-  similarDocuments: any[] = []
+  similarDocuments: any[] = [],
+  options?: { signal?: AbortSignal }
 ) {
   const contextPrompt = buildContextPrompt(similarDocuments);
+  const startedAt = Date.now();
 
-  const analysisPrompt = `
+  try {
+    logger.info(`Sending analysis request via provider: ${LLM_PROVIDER}`);
+
+    const prompt = buildAnalysisPrompt(documentText, contextPrompt, DOC_SNIPPET_CHARS);
+    const retryPrompt = buildAnalysisPrompt(
+      documentText,
+      contextPrompt,
+      Math.max(700, Math.floor(DOC_SNIPPET_CHARS * 0.65))
+    );
+
+    const analysisText = await runAnalysisWithRetry(prompt, retryPrompt, options?.signal);
+
+    if (!analysisText) throw new Error('Empty response from LLM provider');
+    const rawAnalysis = parseAIResponse(analysisText);
+    const validatedAnalysis = validateAnalysisResponse(rawAnalysis);
+    logger.debug(`Successfully parsed AI analysis in ${Date.now() - startedAt}ms`);
+    return validatedAnalysis;
+  } catch (error) {
+    logger.warn(`LLM analysis error after ${Date.now() - startedAt}ms:`, error);
+    if (isTimeoutError(error)) {
+      logger.warn('Timed out during analysis. Keeping the document on the real LLM path is preferred; check model speed or timeout settings.');
+    }
+    logger.info('Falling back to fast heuristic analysis');
+    return generateFastAnalysis(documentText, similarDocuments);
+  }
+}
+
+// Fallback standard analysis function
+export async function analyzeDocument(documentText: string) {
+  return generateFastAnalysis(documentText);
+}
+
+async function runOpenAIAnalysis(prompt: string): Promise<string> {
+  if (!openai) throw new Error('OPENAI_API_KEY missing');
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+    max_tokens: 2200,
+    temperature: 0.2,
+  });
+  return response.choices[0].message.content || '';
+}
+
+async function runGroqAnalysis(prompt: string, signal?: AbortSignal): Promise<string> {
+  if (!groqKey) throw new Error('GROQ_API_KEY missing');
+  const response = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${groqKey}`,
+    },
+    signal,
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      max_tokens: 1800,
+      temperature: 0.2,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Groq API error ${response.status}: ${text}`);
+  }
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function runAnthropicAnalysis(prompt: string, signal?: AbortSignal): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY missing');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    signal: combineAbortSignals(signal),
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1800,
+      temperature: 0.2,
+      system: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Anthropic API error ${res.status}: ${t}`);
+  }
+  const data = (await res.json()) as {
+    content?: Array<{ type: string; text?: string }>;
+  };
+  const text = data.content?.find((c) => c.type === 'text')?.text || '';
+  return text;
+}
+
+async function runOllamaAnalysis(prompt: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    signal: combineAbortSignals(controller.signal, signal),
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      format: 'json',
+      stream: false,
+      options: {
+        temperature: 0.2,
+        num_predict: 520,
+      },
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  clearTimeout(timeout);
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Ollama API error ${res.status}: ${t}`);
+  }
+  const data = (await res.json()) as { message?: { content?: string } };
+  logger.debug(`Ollama analysis finished in ${Date.now() - startedAt}ms`);
+  return data.message?.content || '';
+}
+
+async function runAnalysisWithRetry(prompt: string, retryPrompt: string, signal?: AbortSignal): Promise<string> {
+  if (LLM_PROVIDER === 'ollama') {
+    try {
+      return await runOllamaAnalysis(prompt, OLLAMA_TIMEOUT_MS, signal);
+    } catch (error) {
+      if (!isTimeoutError(error)) {
+        throw error;
+      }
+
+      logger.warn('Primary Ollama attempt timed out, retrying with a smaller prompt.');
+      return await runOllamaAnalysis(retryPrompt, OLLAMA_RETRY_TIMEOUT_MS, signal);
+    }
+  }
+
+  if (LLM_PROVIDER === 'openai') {
+    return await runOpenAIAnalysis(prompt);
+  }
+
+  if (LLM_PROVIDER === 'groq') {
+    return await runGroqAnalysis(prompt, signal);
+  }
+
+  if (LLM_PROVIDER === 'anthropic') {
+    return await runAnthropicAnalysis(prompt, signal);
+  }
+
+  if (LLM_PROVIDER === 'mock') {
+    throw new Error('mock provider — use fallback');
+  }
+
+  throw new Error(`Unsupported LLM provider "${LLM_PROVIDER}"`);
+}
+
+function buildAnalysisPrompt(documentText: string, contextPrompt: string, snippetChars: number): string {
+  return `
 ${contextPrompt}
 
 You are a legal document analysis expert.
 Return only JSON.
 Focus on the most important risks and keep each field concise.
+Prioritize clause extraction, risk signals, and a short plain-English explanation.
 
 IMPORTANT: Return ONLY a valid JSON object with no additional text, markdown formatting, or code blocks.
 
@@ -104,123 +300,35 @@ The JSON should have this exact structure:
   ]
 }
 
+Keep riskFactors to at most 5 items, recommendations to at most 5 items, and clauses to the most important 8 clauses.
+
 Document to analyze:
-${documentText.substring(0, DOC_SNIPPET_CHARS)}
+${documentText.substring(0, snippetChars)}
 `;
+}
 
-  try {
-    logger.info(`Sending analysis request via provider: ${LLM_PROVIDER}`);
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || /aborted/i.test(error.message));
+}
 
-    let analysisText = '';
-    if (LLM_PROVIDER === 'ollama') {
-      analysisText = await runOllamaAnalysis(analysisPrompt, OLLAMA_TIMEOUT_MS);
-    } else if (LLM_PROVIDER === 'openai') {
-      analysisText = await runOpenAIAnalysis(analysisPrompt);
-    } else if (LLM_PROVIDER === 'anthropic') {
-      analysisText = await runAnthropicAnalysis(analysisPrompt);
-    } else if (LLM_PROVIDER === 'mock') {
-      throw new Error('mock provider — use fallback');
-    } else {
-      throw new Error(`Unsupported LLM provider "${LLM_PROVIDER}"`);
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) return undefined;
+  if (activeSignals.length === 1) return activeSignals[0];
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
     }
 
-    if (!analysisText) throw new Error('Empty response from LLM provider');
-    const rawAnalysis = parseAIResponse(analysisText);
-    const validatedAnalysis = validateAnalysisResponse(rawAnalysis);
-    logger.debug('Successfully parsed AI analysis');
-    return validatedAnalysis;
-  } catch (error) {
-    logger.warn('LLM analysis error:', error);
-    logger.info('Falling back to fast heuristic analysis');
-    return generateFastAnalysis(documentText, similarDocuments);
+    signal.addEventListener('abort', abort, { once: true });
   }
-}
 
-// Fallback standard analysis function
-export async function analyzeDocument(documentText: string) {
-  return generateFastAnalysis(documentText);
-}
-
-async function runOpenAIAnalysis(prompt: string): Promise<string> {
-  if (!openai) throw new Error('OPENAI_API_KEY missing');
-  const response = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    max_tokens: 2200,
-    temperature: 0.2,
-  });
-  return response.choices[0].message.content || '';
-}
-
-async function runAnthropicAnalysis(prompt: string): Promise<string> {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY missing');
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 1800,
-      temperature: 0.2,
-      system: 'You are a legal document analysis expert. Always respond with valid JSON only.',
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${t}`);
-  }
-  const data = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-  const text = data.content?.find((c) => c.type === 'text')?.text || '';
-  return text;
-}
-
-async function runOllamaAnalysis(prompt: string, timeoutMs: number): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    signal: controller.signal,
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      format: 'json',
-      stream: false,
-      options: {
-        temperature: 0.2,
-        num_predict: 700,
-      },
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a legal document analysis expert. Always respond with valid JSON only.',
-        },
-        { role: 'user', content: prompt },
-      ],
-    }),
-  });
-  clearTimeout(timeout);
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Ollama API error ${res.status}: ${t}`);
-  }
-  const data = (await res.json()) as { message?: { content?: string } };
-  return data.message?.content || '';
+  return controller.signal;
 }
 
 function buildContextPrompt(similarDocuments: any[]): string {
@@ -398,14 +506,28 @@ function buildClauses(text: string, riskScore: number): AnalysisResponse['clause
 }
 
 function parseAIResponse(text: string): any {
-  const cleaned = text.trim();
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
   try {
     return JSON.parse(cleaned);
   } catch {
     const match = cleaned.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('Could not parse JSON from AI response');
-    return JSON.parse(match[0]);
+
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      const repaired = repairJsonLikeString(match[0]);
+      return JSON.parse(repaired);
+    }
   }
+}
+
+function repairJsonLikeString(input: string): string {
+  return input
+    .replace(/,\s*([}\]])/g, '$1')
+    .replace(/,\s*$/gm, '')
+    .replace(/[\u0000-\u001F]+/g, ' ')
+    .trim();
 }
 
 function validateAnalysisResponse(obj: any): AnalysisResponse {

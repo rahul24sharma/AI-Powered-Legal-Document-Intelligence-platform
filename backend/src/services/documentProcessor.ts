@@ -1,20 +1,15 @@
 import { ClauseType } from '@prisma/client';
 import { analyzeDocumentWithContext } from './aiAnalyzer';
-
 import {
   createEmbedding,
   storeDocumentEmbedding,
-  findSimilarDocuments,
   detectDocumentType,
   storeClauseEmbeddings,
   updateDocumentWithAnalysis,
 } from './pineconeService';
-import { rankSimilarDocuments } from './similarityRanking';
 import { prisma } from '../lib/prisma';
 import { extractTextFromStoredDocument } from './documentTextExtractor';
 import { logger } from '../lib/logger';
-
-const CONTEXT_SIMILAR_RETRIEVAL_K = 18;
 
 const VALID_CLAUSE_TYPES: ClauseType[] = [
   'TERMINATION',
@@ -24,10 +19,43 @@ const VALID_CLAUSE_TYPES: ClauseType[] = [
   'INTELLECTUAL_PROPERTY',
   'DISPUTE_RESOLUTION',
   'FORCE_MAJEURE',
-  'OTHER'
+  'OTHER',
 ];
 
+const activeProcessingControllers = new Map<string, AbortController>();
+
+function createProcessingController(documentId: string): AbortController {
+  const controller = new AbortController();
+  activeProcessingControllers.set(documentId, controller);
+  return controller;
+}
+
+function clearProcessingController(documentId: string): void {
+  activeProcessingControllers.delete(documentId);
+}
+
+export function cancelDocumentProcessing(documentId: string): boolean {
+  const controller = activeProcessingControllers.get(documentId);
+  if (!controller) return false;
+  controller.abort(new DOMException('Document processing cancelled', 'AbortError'));
+  return true;
+}
+
+async function isDocumentCancelled(documentId: string, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return true;
+
+  const document = await prisma.document.findUnique({
+    where: { id: documentId },
+    select: { status: true },
+  });
+
+  return document?.status === 'CANCELLED';
+}
+
 export async function processDocument(documentId: string): Promise<void> {
+  const startedAt = Date.now();
+  const controller = createProcessingController(documentId);
+
   try {
     logger.info(`Processing document ${documentId}...`);
 
@@ -36,7 +64,7 @@ export async function processDocument(documentId: string): Promise<void> {
         id: documentId,
         status: { in: ['PENDING', 'FAILED'] },
       },
-      data: { status: 'PROCESSING' }
+      data: { status: 'PROCESSING' },
     });
 
     if (lock.count === 0) {
@@ -50,7 +78,7 @@ export async function processDocument(documentId: string): Promise<void> {
 
     const document = await prisma.document.findUnique({
       where: { id: documentId },
-      include: { user: true, analysis: { select: { id: true } } }
+      include: { user: true, analysis: { select: { id: true } } },
     });
 
     if (!document) throw new Error('Document not found');
@@ -58,19 +86,25 @@ export async function processDocument(documentId: string): Promise<void> {
       logger.info(`Document ${documentId} already has analysis; marking completed`);
       await prisma.document.update({
         where: { id: documentId },
-        data: { status: 'COMPLETED' }
+        data: { status: 'COMPLETED' },
       });
       return;
     }
 
-    const extractedText = await extractTextFromStoredDocument(document);
+    if (document.status === 'CANCELLED') {
+      logger.info(`Document ${documentId} was cancelled before processing started`);
+      return;
+    }
 
+    const extractedText = await extractTextFromStoredDocument(document);
     if (!extractedText.trim()) throw new Error('No text could be extracted from document');
 
-    logger.debug(`Extracted ${extractedText.length} characters from document`);
+    logger.debug(`Extracted ${extractedText.length} characters from document in ${Date.now() - startedAt}ms`);
 
     const documentType = detectDocumentType(extractedText);
+    const embeddingStartedAt = Date.now();
     const documentEmbedding = await createEmbedding(extractedText);
+    logger.debug(`Created document embedding in ${Date.now() - embeddingStartedAt}ms`);
 
     const storeDocumentPromise = storeDocumentEmbedding(
       documentId,
@@ -84,46 +118,23 @@ export async function processDocument(documentId: string): Promise<void> {
       { embedding: documentEmbedding }
     );
 
-    const pineconeMatchesPromise = findSimilarDocuments(
-      extractedText,
-      document.userId,
-      CONTEXT_SIMILAR_RETRIEVAL_K,
-      { embedding: documentEmbedding }
-    );
+    if (await isDocumentCancelled(documentId, controller.signal)) {
+      logger.info(`Document ${documentId} cancelled before analysis`);
+      return;
+    }
 
-    await storeDocumentPromise;
-    const pineconeMatches = await pineconeMatchesPromise;
-
-    const filtered = pineconeMatches.filter((m) => m.id !== documentId);
-    const dbForRank = await prisma.document.findMany({
-      where: {
-        id: { in: filtered.map((m) => m.id) },
-        userId: document.userId,
-      },
-      select: {
-        id: true,
-        originalName: true,
-        createdAt: true,
-        analysis: {
-          select: { overallSummary: true, riskScore: true },
-        },
-      },
+    const analysisStartedAt = Date.now();
+    const analysis = await analyzeDocumentWithContext(extractedText, [], {
+      signal: controller.signal,
     });
+    logger.debug(`Completed AI analysis in ${Date.now() - analysisStartedAt}ms`);
 
-    const rankedContext = rankSimilarDocuments(filtered, extractedText, dbForRank, {
-      limit: 1,
-    });
+    if (await isDocumentCancelled(documentId, controller.signal)) {
+      logger.info(`Document ${documentId} cancelled after analysis`);
+      return;
+    }
 
-    const similarDocuments = rankedContext.map((r) => ({
-      id: r.id,
-      similarity: r.similarity,
-      metadata: r.metadata,
-    }));
-
-    logger.debug(`Found ${similarDocuments.length} ranked similar documents for context`);
-
-    const analysis = await analyzeDocumentWithContext(extractedText, similarDocuments);
-
+    const persistStartedAt = Date.now();
     const savedAnalysis = await prisma.analysis.create({
       data: {
         documentId: document.id,
@@ -135,30 +146,36 @@ export async function processDocument(documentId: string): Promise<void> {
         recommendations: analysis.recommendations,
         clauses: {
           create: analysis.clauses.map((clause: any) => ({
-            type: VALID_CLAUSE_TYPES.includes(clause.type)
-              ? clause.type
-              : 'OTHER', // ✅ fallback for unexpected types
+            type: VALID_CLAUSE_TYPES.includes(clause.type) ? clause.type : 'OTHER',
             content: clause.content,
             riskLevel: clause.riskLevel,
             explanation: clause.explanation,
             suggestions: clause.suggestions,
             position: {
               page: clause.position?.page ?? 0,
-              section: clause.position?.section ?? 'N/A'
-            }
-          }))
-        }
+              section: clause.position?.section ?? 'N/A',
+            },
+          })),
+        },
       },
-      include: { clauses: true }
+      include: { clauses: true },
     });
+
+    if (await isDocumentCancelled(documentId, controller.signal)) {
+      logger.info(`Document ${documentId} cancelled before finalizing`);
+      return;
+    }
 
     await prisma.document.update({
       where: { id: documentId },
-      data: { status: 'COMPLETED' }
+      data: { status: 'COMPLETED' },
     });
+    logger.debug(`Persisted analysis and marked completed in ${Date.now() - persistStartedAt}ms`);
 
     void (async () => {
       try {
+        await storeDocumentPromise;
+
         if (savedAnalysis.clauses.length > 0) {
           await storeClauseEmbeddings(documentId, savedAnalysis.clauses, document.userId);
         }
@@ -169,14 +186,23 @@ export async function processDocument(documentId: string): Promise<void> {
       }
     })();
 
-    logger.info(`Document ${documentId} processed successfully with Pinecone integration`);
-
+    logger.info(`Document ${documentId} processed successfully with Pinecone integration in ${Date.now() - startedAt}ms`);
   } catch (error) {
-    logger.error(`Error processing document ${documentId}:`, error);
+    if (
+      error instanceof Error &&
+      (error.name === 'AbortError' || /cancelled/i.test(error.message))
+    ) {
+      logger.info(`Document ${documentId} processing cancelled after ${Date.now() - startedAt}ms`);
+      return;
+    }
+
+    logger.error(`Error processing document ${documentId} after ${Date.now() - startedAt}ms:`, error);
 
     await prisma.document.update({
       where: { id: documentId },
-      data: { status: 'FAILED' }
+      data: { status: 'FAILED' },
     });
+  } finally {
+    clearProcessingController(documentId);
   }
 }

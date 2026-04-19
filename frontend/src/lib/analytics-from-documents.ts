@@ -1,7 +1,7 @@
 import type { Document } from '@/types';
 import { parseISO, startOfISOWeek, format } from 'date-fns';
 
-const STATUS_ORDER = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'] as const;
+const STATUS_ORDER = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED'] as const;
 
 export interface WeeklyPoint {
   key: string;
@@ -33,6 +33,7 @@ function emptyStatus(): WorkspaceAnalytics['byStatus'] {
     PROCESSING: 0,
     COMPLETED: 0,
     FAILED: 0,
+    CANCELLED: 0,
   };
 }
 

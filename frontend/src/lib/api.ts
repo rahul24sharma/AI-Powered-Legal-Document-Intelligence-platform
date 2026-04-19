@@ -48,6 +48,11 @@ type UploadResponse = {
   };
 };
 
+type CancelDocumentResponse = {
+  message: string;
+  document: Document;
+};
+
 export class APIError extends Error {
   status?: number;
   code?: string;
@@ -182,6 +187,13 @@ export const documentsAPI = {
     return request<UploadResponse>('/upload', {
       method: 'POST',
       body: formData,
+    });
+  },
+
+  /** Cancel an in-progress document review. */
+  cancelDocumentProcessing: async (id: string): Promise<CancelDocumentResponse> => {
+    return request<CancelDocumentResponse>(`/documents/${id}/cancel`, {
+      method: 'POST',
     });
   },
 

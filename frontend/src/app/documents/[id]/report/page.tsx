@@ -213,33 +213,40 @@ export default function DocumentReportPage() {
               </Alert>
             ) : (
               <>
-                <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+                <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
                   <Card className="border-border/70 shadow-sm print:shadow-none">
                     <CardHeader>
                       <SectionTitle
-                        eyebrow="Executive summary"
-                        title="What matters most"
-                        description="A concise view of the overall position and the risk posture."
+                        eyebrow="Clause review"
+                        title="Important clauses"
+                        description="Short summaries of the clauses that most affect risk and negotiation."
                       />
                     </CardHeader>
-                    <CardContent className="space-y-5">
-                      <div>
-                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Summary</p>
-                        <p className="text-sm leading-relaxed">{analysis.overallSummary}</p>
-                      </div>
-                      <div>
-                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Plain language</p>
-                        <p className="text-sm leading-relaxed">{analysis.plainEnglish}</p>
-                      </div>
-                      <div>
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="text-sm font-medium">Risk score</span>
-                          <span className={cn('text-lg font-semibold tabular-nums', getRiskScoreClass(analysis.riskScore))}>
-                            {analysis.riskScore}/100
-                          </span>
-                        </div>
-                        <Progress value={analysis.riskScore} className="h-3 print:bg-black/10" />
-                      </div>
+                    <CardContent className="space-y-3">
+                      {clauses.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No clauses were extracted.</p>
+                      ) : (
+                        clauses.map((clause) => (
+                          <div key={clause.id} className="rounded-2xl border border-border/70 p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-medium">{clause.type.replace(/_/g, ' ')}</p>
+                              <Badge variant="outline" className="font-normal print:border-black/20">
+                                {clause.riskLevel}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 text-sm text-muted-foreground">{clause.explanation}</p>
+                            <p className="mt-3 text-sm leading-relaxed">{clause.content}</p>
+                            {clause.suggestions?.length ? (
+                              <div className="mt-3">
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                  Suggestions
+                                </p>
+                                <PillList items={clause.suggestions} />
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
                     </CardContent>
                   </Card>
 
@@ -298,40 +305,33 @@ export default function DocumentReportPage() {
                   </CardContent>
                 </Card>
 
-                <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+                <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
                   <Card className="border-border/70 shadow-sm print:shadow-none">
                     <CardHeader>
                       <SectionTitle
-                        eyebrow="Clause review"
-                        title="Important clauses"
-                        description="Short summaries of the clauses that most affect risk and negotiation."
+                        eyebrow="Executive summary"
+                        title="What matters most"
+                        description="A concise view of the overall position and the risk posture."
                       />
                     </CardHeader>
-                    <CardContent className="space-y-3">
-                      {clauses.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No clauses were extracted.</p>
-                      ) : (
-                        clauses.map((clause) => (
-                          <div key={clause.id} className="rounded-2xl border border-border/70 p-4">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="font-medium">{clause.type.replace(/_/g, ' ')}</p>
-                              <Badge variant="outline" className="font-normal print:border-black/20">
-                                {clause.riskLevel}
-                              </Badge>
-                            </div>
-                            <p className="mt-2 text-sm text-muted-foreground">{clause.explanation}</p>
-                            <p className="mt-3 text-sm leading-relaxed">{clause.content}</p>
-                            {clause.suggestions?.length ? (
-                              <div className="mt-3">
-                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                  Suggestions
-                                </p>
-                                <PillList items={clause.suggestions} />
-                              </div>
-                            ) : null}
-                          </div>
-                        ))
-                      )}
+                    <CardContent className="space-y-5">
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Summary</p>
+                        <p className="text-sm leading-relaxed">{analysis.overallSummary}</p>
+                      </div>
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Plain language</p>
+                        <p className="text-sm leading-relaxed">{analysis.plainEnglish}</p>
+                      </div>
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-sm font-medium">Risk score</span>
+                          <span className={cn('text-lg font-semibold tabular-nums', getRiskScoreClass(analysis.riskScore))}>
+                            {analysis.riskScore}/100
+                          </span>
+                        </div>
+                        <Progress value={analysis.riskScore} className="h-3 print:bg-black/10" />
+                      </div>
                     </CardContent>
                   </Card>
 

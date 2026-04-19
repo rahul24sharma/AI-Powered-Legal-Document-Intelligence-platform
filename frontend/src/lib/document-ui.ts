@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, FileText, RefreshCw, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, CheckCircle, FileText, RefreshCw, XCircle, type LucideIcon } from 'lucide-react';
 
 /** Map backend document statuses to badge colors used across document screens. */
 export function getDocumentStatusBadgeClass(status: string): string {
@@ -9,6 +9,8 @@ export function getDocumentStatusBadgeClass(status: string): string {
       return 'bg-amber-500/15 text-amber-900 dark:text-amber-400';
     case 'FAILED':
       return 'bg-destructive/15 text-destructive';
+    case 'CANCELLED':
+      return 'bg-muted text-muted-foreground';
     default:
       return 'bg-muted text-muted-foreground';
   }
@@ -23,6 +25,8 @@ export function getDocumentStatusIcon(status: string): LucideIcon {
       return RefreshCw;
     case 'FAILED':
       return AlertTriangle;
+    case 'CANCELLED':
+      return XCircle;
     default:
       return FileText;
   }

@@ -13,7 +13,7 @@ export interface User {
     downloadUrl?: string | null;
     fileSize: number;
     mimeType: string;
-    status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+    status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
     createdAt: string;
     analysis?: Analysis;
   }
