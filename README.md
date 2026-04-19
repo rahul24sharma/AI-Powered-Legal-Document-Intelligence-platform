@@ -18,11 +18,24 @@ Legal review is repetitive, slow, and easy to get wrong when teams are juggling 
 - Authenticate users with a custom JWT flow
 - Process documents in the background
 - Extract clauses, risk factors, recommendations, and summaries
+- Score risk on a 0-100 scale
+- Highlight risky clause areas with explanations and suggested checks
 - Search documents by name, status, type, and analysis content
 - Show document similarity using vector search and ranking
 - Track analytics with dashboard and trend views
 - Export an executive-style report from any analyzed document
+- Cancel in-progress analysis when a review needs to stop
 - Store files locally or in Supabase Storage
+
+## Product Surfaces
+
+- **Login / Register**: branded auth experience with JWT-based session handling.
+- **Dashboard**: quick workspace snapshot with status metrics and upload cadence.
+- **Documents**: searchable, paginated library for scanning document status at a glance.
+- **Document detail**: primary review workspace with processing state, risk score, clause findings, plain-language summary, download action, cancel action, and report export.
+- **Analytics**: deeper trend views for intake, risk distribution, and review volume.
+- **Report export**: printable executive report for sharing or saving as PDF.
+- **Upload**: file intake flow that redirects a single upload into its analysis page.
 
 ## Key Features
 
@@ -34,6 +47,8 @@ Legal review is repetitive, slow, and easy to get wrong when teams are juggling 
 - Responsive dashboard, documents table, analytics, and report pages
 - Pagination and search for the document library
 - Secure upload flow with cleanup on partial failure
+- Document processing cancellation for long-running reviews
+- Graceful fallback paths for storage, queueing, and analysis errors
 
 ## Tech Stack
 
@@ -74,6 +89,43 @@ Main backend flow:
 5. Text is extracted, analyzed, and stored.
 6. Pinecone receives embeddings for document and clause similarity.
 7. The frontend polls status until the analysis is ready.
+
+### Document lifecycle
+
+- `PENDING`: the file has been stored and the processing job is waiting to start.
+- `PROCESSING`: extraction, analysis, and embedding work are in progress.
+- `COMPLETED`: analysis finished successfully and the document is ready for review.
+- `FAILED`: processing failed and should be retried or inspected.
+- `CANCELLED`: a user stopped the review before completion.
+
+### Analysis pipeline
+
+- Text extraction handles PDF and DOCX/DOC input.
+- The analysis service builds a structured prompt for clause extraction, risk scoring, and plain-English summaries.
+- Groq is the fastest hosted provider path for demos when configured.
+- Ollama remains the local/offline provider path.
+- OpenAI and Anthropic remain supported alternatives.
+- A heuristic fallback exists so the app can still complete a review when the model path fails.
+
+### Similarity and context
+
+- Document embeddings are stored in Pinecone for semantic lookup.
+- Clause embeddings are also stored so important passages can be compared later.
+- Similar documents are used as context for better analysis and for the report view.
+
+### Storage and persistence
+
+- PostgreSQL/Prisma stores users, documents, analyses, and processing metadata.
+- Supabase Storage can hold uploaded files privately.
+- Local disk storage remains available for development fallback.
+- Redis powers queue coordination and rate limiting.
+
+### Reliability and safeguards
+
+- Route-specific token bucket rate limiting protects auth, uploads, and document reads differently.
+- Upload cleanup removes orphaned files if database insertion fails.
+- Document processing can be cancelled while running.
+- The detail page and report page stay usable even if signed download URL generation fails.
 
 ## Project Structure
 
@@ -200,6 +252,8 @@ NEXT_PUBLIC_API_URL=http://localhost:5050
 - The backend can fall back to in-memory behavior if Redis is unavailable, but Redis is the preferred setup.
 - Groq is the preferred fast free-tier LLM path for demos; Ollama remains the local/offline option.
 - Local file storage is supported as a fallback, but Supabase Storage is the better production path.
+- The analysis experience is designed to emphasize risky clauses first, then the summary, then supporting context.
+- The document library is intentionally built for scanning, search, and pagination rather than a card-heavy layout.
 - The project is currently optimized for local demo presentation and interview walkthroughs.
 
 ## License
