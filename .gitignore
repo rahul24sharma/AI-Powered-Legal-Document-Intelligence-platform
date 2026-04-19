@@ -7,3 +7,4 @@ frontend/.next/
 frontend/.next-build/
 backend/dist/
 backend/.env
+backend/uploads/
