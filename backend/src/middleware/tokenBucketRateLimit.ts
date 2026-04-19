@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { getRedisClient } from '../lib/redis';
+import { logger } from '../lib/logger';
 
 type BucketState = {
   tokens: number;
@@ -163,7 +164,7 @@ async function consumeTokenBucket(
       resetAfterMs: Math.max(0, Number(result[3])),
     };
   } catch (error) {
-    console.error('Redis token-bucket eval failed, using in-memory fallback:', error);
+    logger.warn('Redis token-bucket eval failed, using in-memory fallback:', error);
     return consumeFromMemoryBucket(
       bucketKey,
       now,
@@ -221,7 +222,7 @@ export function createTokenBucketLimiter(policy: TokenBucketPolicy) {
 
       next();
     } catch (error) {
-      console.error('Token-bucket limiter error:', error);
+      logger.error('Token-bucket limiter error:', error);
       next();
     }
   };

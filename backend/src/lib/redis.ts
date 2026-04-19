@@ -1,4 +1,5 @@
 import { createClient, type RedisClientType } from 'redis';
+import { logger } from './logger';
 
 let redisClient: RedisClientType | null = null;
 let redisConnectPromise: Promise<RedisClientType | null> | null = null;
@@ -7,7 +8,7 @@ let connectionState: 'idle' | 'connected' | 'fallback' = 'idle';
 function logStateOnce(nextState: 'connected' | 'fallback', message: string): void {
   if (connectionState === nextState) return;
   connectionState = nextState;
-  console.log(message);
+  logger.info(message);
 }
 
 /** Connect to Redis once and reuse the shared client for token-bucket state. */
@@ -29,7 +30,7 @@ export async function getRedisClient(): Promise<RedisClientType | null> {
 
   redisClient = createClient({ url: redisUrl });
   redisClient.on('error', (error) => {
-    console.error('Redis client error:', error);
+    logger.error('Redis client error:', error);
   });
 
   redisConnectPromise = redisClient
@@ -39,7 +40,7 @@ export async function getRedisClient(): Promise<RedisClientType | null> {
       return client;
     })
     .catch((error) => {
-      console.error('Failed to connect to Redis, using in-memory rate limiting fallback:', error);
+      logger.error('Failed to connect to Redis, using in-memory rate limiting fallback:', error);
       redisClient = null;
       logStateOnce('fallback', 'Redis unavailable, using in-memory rate limiting fallback');
       return null;

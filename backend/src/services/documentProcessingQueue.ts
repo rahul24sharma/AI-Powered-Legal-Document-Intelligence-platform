@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Queue from 'bull';
 import { processDocument } from './documentProcessor';
+import { logger } from '../lib/logger';
 
 type ProcessingJob = {
   documentId: string;
@@ -9,10 +10,6 @@ type ProcessingJob = {
 let processingQueue: Queue.Queue<ProcessingJob> | null = null;
 let queueInitialized = false;
 let inlineFallbackWarned = false;
-
-function shouldUseInlineFallback(): boolean {
-  return process.env.NODE_ENV !== 'production';
-}
 
 function getQueue(): Queue.Queue<ProcessingJob> | null {
   if (processingQueue) return processingQueue;
@@ -35,14 +32,22 @@ function getQueue(): Queue.Queue<ProcessingJob> | null {
   });
 
   processingQueue.on('error', (error) => {
-    console.error('Document processing queue error:', error);
+    logger.error('Document processing queue error:', error);
   });
 
   processingQueue.on('failed', (job, error) => {
-    console.error(`Document processing job ${job?.id ?? 'unknown'} failed:`, error);
+    logger.error(`Document processing job ${job?.id ?? 'unknown'} failed:`, error);
   });
 
   return processingQueue;
+}
+
+function runInlineProcessing(documentId: string): void {
+  setImmediate(() => {
+    void processDocument(documentId).catch((error) => {
+      logger.error(`Inline document processing failed for ${documentId}:`, error);
+    });
+  });
 }
 
 /** Initialize the document processing worker so uploads are handled via a durable queue. */
@@ -52,42 +57,43 @@ export async function initializeDocumentProcessingQueue(): Promise<void> {
 
   const queue = getQueue();
   if (!queue) {
-    if (shouldUseInlineFallback() && !inlineFallbackWarned) {
+    if (!inlineFallbackWarned) {
       inlineFallbackWarned = true;
-      console.warn('REDIS_URL not configured. Falling back to in-process document processing.');
+      logger.warn('REDIS_URL not configured. Falling back to direct document processing.');
     }
     return;
   }
 
-  await queue.isReady();
-  await queue.process(async (job) => {
-    await processDocument(job.data.documentId);
-  });
-  console.log('Document processing queue ready');
+  try {
+    await queue.isReady();
+    await queue.process(async (job) => {
+      await processDocument(job.data.documentId);
+    });
+    logger.info('Document processing queue ready');
+  } catch (error) {
+    logger.error('Document queue initialization failed, falling back to direct processing:', error);
+  }
 }
 
-/** Enqueue one document for background processing, with a dev-only inline fallback. */
+/** Enqueue one document for background processing, with a direct-processing fallback. */
 export async function enqueueDocumentProcessing(documentId: string): Promise<void> {
   const queue = getQueue();
 
   if (!queue) {
-    if (!shouldUseInlineFallback()) {
-      throw new Error('Document processing queue is unavailable');
-    }
-
-    setImmediate(() => {
-      void processDocument(documentId).catch((error) => {
-        console.error(`Inline document processing failed for ${documentId}:`, error);
-      });
-    });
+    runInlineProcessing(documentId);
     return;
   }
 
-  await queue.isReady();
-  await queue.add(
-    { documentId },
-    {
-      jobId: documentId,
-    }
-  );
+  try {
+    await queue.isReady();
+    await queue.add(
+      { documentId },
+      {
+        jobId: documentId,
+      }
+    );
+  } catch (error) {
+    logger.error('Queue enqueue failed, falling back to direct processing:', error);
+    runInlineProcessing(documentId);
+  }
 }

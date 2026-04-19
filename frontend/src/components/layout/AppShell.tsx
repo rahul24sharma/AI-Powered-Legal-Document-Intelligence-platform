@@ -1,10 +1,22 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { Navbar } from '@/components/layout/Navbar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isReportRoute = pathname.includes('/report');
+
+  if (isReportRoute) {
+    return (
+      <ProtectedRoute>
+        {children}
+      </ProtectedRoute>
+    );
+  }
+
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-muted/40">

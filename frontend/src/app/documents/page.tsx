@@ -2,10 +2,20 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Upload, Calendar, AlertTriangle } from 'lucide-react';
+import {
+  FileText,
+  Upload,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronFirst,
+  ChevronLast,
+  Calendar,
+} from 'lucide-react';
 import { documentsAPI } from '@/lib/api';
 import { getAxiosErrorMessage } from '@/lib/api-errors';
 import type { Document } from '@/types';
@@ -16,33 +26,76 @@ import {
   getRiskScoreClass,
 } from '@/lib/document-ui';
 
+const PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+
 export default function DocumentsPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [totalDocuments, setTotalDocuments] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [analyzedCount, setAnalyzedCount] = useState(0);
+  const [elevatedRiskCount, setElevatedRiskCount] = useState(0);
+  const searchQuery = (searchParams.get('q') || '').trim();
 
-  const analyzedCount = documents.filter((document) => Boolean(document.analysis)).length;
-  const elevatedRiskCount = documents.filter(
-    (document) => document.analysis && document.analysis.riskScore > 70
-  ).length;
+  const page = Math.max(1, Number(searchParams.get('page') || '1') || 1);
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(searchParams.get('limit') || PAGE_SIZE))
+    ? Number(searchParams.get('limit') || PAGE_SIZE)
+    : PAGE_SIZE;
+
+  const updateQuery = (nextPage: number, nextPageSize: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (searchQuery) params.set('q', searchQuery);
+    else params.delete('q');
+    if (nextPage <= 1) params.delete('page');
+    else params.set('page', String(nextPage));
+
+    if (nextPageSize === PAGE_SIZE) params.delete('limit');
+    else params.set('limit', String(nextPageSize));
+
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
   useEffect(() => {
-    fetchDocuments();
-  }, []);
+    let cancelled = false;
 
-  /** Load the current document list shown on the library page. */
-  const fetchDocuments = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const response = await documentsAPI.getDocuments();
-      setDocuments(response.documents);
-    } catch (err: unknown) {
-      setError(getAxiosErrorMessage(err, 'Failed to fetch documents'));
-    } finally {
-      setLoading(false);
+    async function fetchDocuments() {
+      try {
+        setLoading(true);
+        setError('');
+        const response = await documentsAPI.getDocuments({ page, limit: pageSize, q: searchQuery || undefined });
+        if (cancelled) return;
+
+        setDocuments(response.documents);
+        setTotalDocuments(response.pagination?.total ?? response.documents.length);
+        setTotalPages(response.pagination?.totalPages ?? 1);
+        setAnalyzedCount(response.summary?.analyzedCount ?? response.documents.filter((document) => Boolean(document.analysis)).length);
+        setElevatedRiskCount(
+          response.summary?.elevatedRiskCount ??
+            response.documents.filter((document) => document.analysis && document.analysis.riskScore > 70).length
+        );
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError(getAxiosErrorMessage(err, 'Failed to fetch documents'));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
     }
-  };
+
+    void fetchDocuments();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, pageSize, searchQuery]);
 
   if (loading) {
     return (
@@ -73,10 +126,15 @@ export default function DocumentsPage() {
           <p className="max-w-2xl text-muted-foreground">
             Browse your uploaded files, compare risk at a glance, and jump straight into analysis.
           </p>
-          {!loading && documents.length > 0 ? (
+          {searchQuery ? (
+            <Badge variant="outline" className="w-fit rounded-full px-3 py-1 font-normal text-muted-foreground">
+              Search: {searchQuery}
+            </Badge>
+          ) : null}
+          {!loading && totalDocuments > 0 ? (
             <div className="flex flex-wrap gap-2">
               <Badge variant="secondary" className="rounded-full px-3 py-1 font-normal">
-                {documents.length} total
+                {totalDocuments} total
               </Badge>
               <Badge variant="secondary" className="rounded-full px-3 py-1 font-normal">
                 {analyzedCount} analyzed
@@ -93,12 +151,28 @@ export default function DocumentsPage() {
             </div>
           ) : null}
         </div>
-        <Button asChild className="shadow-sm">
-          <Link href="/upload">
-            <Upload className="mr-2 h-4 w-4" />
-            Upload document
-          </Link>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground shadow-sm">
+            <span className="whitespace-nowrap">Rows</span>
+            <select
+              className="bg-transparent text-sm text-foreground outline-none"
+              value={pageSize}
+              onChange={(e) => updateQuery(1, Number(e.target.value))}
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button asChild className="shadow-sm">
+            <Link href="/upload">
+              <Upload className="mr-2 h-4 w-4" />
+              Upload document
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -346,6 +420,52 @@ export default function DocumentsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {totalPages > 1 ? (
+            <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-card px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {totalPages}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => updateQuery(1, pageSize)}
+                  disabled={page <= 1 || loading}
+                >
+                  <ChevronFirst className="mr-1 h-4 w-4" />
+                  First
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => updateQuery(Math.max(1, page - 1), pageSize)}
+                  disabled={page <= 1 || loading}
+                >
+                  <ChevronLeft className="mr-1 h-4 w-4" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => updateQuery(Math.min(totalPages, page + 1), pageSize)}
+                  disabled={page >= totalPages || loading}
+                >
+                  Next
+                  <ChevronRight className="ml-1 h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => updateQuery(totalPages, pageSize)}
+                  disabled={page >= totalPages || loading}
+                >
+                  Last
+                  <ChevronLast className="ml-1 h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </>
       )}
     </div>

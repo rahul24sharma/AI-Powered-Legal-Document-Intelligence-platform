@@ -5,6 +5,7 @@ import type { Document } from '@prisma/client';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getBackendOrigin } from '../utils/serverOrigin';
 import { getUploadedFilePath, persistLocalUpload } from '../utils/uploadPaths';
+import { logger } from '../lib/logger';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -169,7 +170,7 @@ export async function tryCreateDocumentAccessUrl(
   try {
     return await createDocumentAccessUrl(document, expiresInSeconds);
   } catch (error) {
-    console.error(`Failed to create access URL for document ${document.id}:`, error);
+    logger.warn(`Failed to create access URL for document ${document.id}:`, error);
     return null;
   }
 }

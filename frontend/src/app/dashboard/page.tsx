@@ -139,11 +139,11 @@ export default function DashboardPage() {
           <div className="relative border-b border-border/70 px-6 py-5">
             <div className="flex items-center gap-2 text-primary">
               <Sparkles className="h-5 w-5" aria-hidden />
-              <span className="text-xs font-semibold uppercase tracking-wide">Throughput</span>
+              <span className="text-xs font-semibold uppercase tracking-wide">Workspace pulse</span>
             </div>
-            <h3 className="mt-2 text-xl font-semibold tracking-tight">Upload cadence</h3>
+            <h3 className="mt-2 text-xl font-semibold tracking-tight">Weekly intake pulse</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Weekly intake trend — spot spikes in contract volume early.
+              A quick snapshot of how intake is moving right now.
             </p>
           </div>
           <CardContent className="px-4 pb-6 pt-2 sm:px-6">
@@ -178,23 +178,6 @@ export default function DashboardPage() {
                 title="Upload center"
                 subtitle="PDF & Word intake with AI processing"
               />
-            </CardContent>
-          </Card>
-
-          <Card className="border-primary/15 bg-gradient-to-br from-primary/[0.06] via-card to-card shadow-sm">
-            <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0 space-y-1">
-                <p className="text-sm font-semibold text-foreground">Deep-dive metrics</p>
-                <p className="text-sm text-muted-foreground">
-                  Explore distribution charts, risk histograms, and recent intake detail.
-                </p>
-              </div>
-              <Button variant="secondary" className="shrink-0 gap-2 shadow-sm" asChild>
-                <Link href="/analytics">
-                  Open analytics
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </Button>
             </CardContent>
           </Card>
         </div>

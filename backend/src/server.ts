@@ -14,13 +14,14 @@ import {
   rateLimitKeyGenerators,
 } from './middleware/tokenBucketRateLimit';
 import { initializeDocumentProcessingQueue } from './services/documentProcessingQueue';
+import { logger } from './lib/logger';
 
 const app = express();
 const PORT = process.env.PORT || 5050;
 const uploadDir = ensureUploadDir();
 
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url} - Origin: ${req.get('Origin')}`);
+  logger.debug(`${req.method} ${req.url} - Origin: ${req.get('Origin')}`);
   next();
 });
 
@@ -71,7 +72,7 @@ app.use(
       if (isOriginAllowed(origin)) {
         return callback(null, true);
       }
-      console.log('CORS blocked origin:', origin);
+      logger.warn('CORS blocked origin:', origin);
       return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -137,7 +138,7 @@ app.get('/health', (req, res) => {
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
+  logger.error('Error:', err);
   res.status(err.status || 500).json({ 
     message: err.message || 'Something went wrong!',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
@@ -153,7 +154,7 @@ void primeRedisConnection();
 void initializeDocumentProcessingQueue();
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+  logger.info(`🚀 Server running on port ${PORT}`);
+  logger.info(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
+  logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
 });

@@ -2,6 +2,7 @@ import { ClauseType } from '@prisma/client';
 import { analyzeDocumentWithContext } from './aiAnalyzer';
 
 import {
+  createEmbedding,
   storeDocumentEmbedding,
   findSimilarDocuments,
   detectDocumentType,
@@ -11,6 +12,7 @@ import {
 import { rankSimilarDocuments } from './similarityRanking';
 import { prisma } from '../lib/prisma';
 import { extractTextFromStoredDocument } from './documentTextExtractor';
+import { logger } from '../lib/logger';
 
 const CONTEXT_SIMILAR_RETRIEVAL_K = 18;
 
@@ -27,7 +29,7 @@ const VALID_CLAUSE_TYPES: ClauseType[] = [
 
 export async function processDocument(documentId: string): Promise<void> {
   try {
-    console.log(`📄 Processing document ${documentId}...`);
+    logger.info(`Processing document ${documentId}...`);
 
     const lock = await prisma.document.updateMany({
       where: {
@@ -42,7 +44,7 @@ export async function processDocument(documentId: string): Promise<void> {
         where: { id: documentId },
         select: { status: true },
       });
-      console.log(`⏭️ Skipping document ${documentId}; current status is ${existing?.status ?? 'missing'}`);
+      logger.info(`Skipping document ${documentId}; current status is ${existing?.status ?? 'missing'}`);
       return;
     }
 
@@ -53,7 +55,7 @@ export async function processDocument(documentId: string): Promise<void> {
 
     if (!document) throw new Error('Document not found');
     if (document.analysis) {
-      console.log(`⏭️ Document ${documentId} already has analysis; marking completed`);
+      logger.info(`Document ${documentId} already has analysis; marking completed`);
       await prisma.document.update({
         where: { id: documentId },
         data: { status: 'COMPLETED' }
@@ -65,21 +67,32 @@ export async function processDocument(documentId: string): Promise<void> {
 
     if (!extractedText.trim()) throw new Error('No text could be extracted from document');
 
-    console.log(`📝 Extracted ${extractedText.length} characters from document`);
+    logger.debug(`Extracted ${extractedText.length} characters from document`);
 
     const documentType = detectDocumentType(extractedText);
-    await storeDocumentEmbedding(documentId, extractedText, {
-      userId: document.userId,
-      documentType,
-      fileName: document.originalName,
-      organizationId: document.organizationId || undefined
-    });
+    const documentEmbedding = await createEmbedding(extractedText);
 
-    const pineconeMatches = await findSimilarDocuments(
+    const storeDocumentPromise = storeDocumentEmbedding(
+      documentId,
+      extractedText,
+      {
+        userId: document.userId,
+        documentType,
+        fileName: document.originalName,
+        organizationId: document.organizationId || undefined,
+      },
+      { embedding: documentEmbedding }
+    );
+
+    const pineconeMatchesPromise = findSimilarDocuments(
       extractedText,
       document.userId,
-      CONTEXT_SIMILAR_RETRIEVAL_K
+      CONTEXT_SIMILAR_RETRIEVAL_K,
+      { embedding: documentEmbedding }
     );
+
+    await storeDocumentPromise;
+    const pineconeMatches = await pineconeMatchesPromise;
 
     const filtered = pineconeMatches.filter((m) => m.id !== documentId);
     const dbForRank = await prisma.document.findMany({
@@ -98,7 +111,7 @@ export async function processDocument(documentId: string): Promise<void> {
     });
 
     const rankedContext = rankSimilarDocuments(filtered, extractedText, dbForRank, {
-      limit: 3,
+      limit: 1,
     });
 
     const similarDocuments = rankedContext.map((r) => ({
@@ -107,7 +120,7 @@ export async function processDocument(documentId: string): Promise<void> {
       metadata: r.metadata,
     }));
 
-    console.log(`🔍 Found ${similarDocuments.length} ranked similar documents for context`);
+    logger.debug(`Found ${similarDocuments.length} ranked similar documents for context`);
 
     const analysis = await analyzeDocumentWithContext(extractedText, similarDocuments);
 
@@ -139,21 +152,27 @@ export async function processDocument(documentId: string): Promise<void> {
       include: { clauses: true }
     });
 
-    if (savedAnalysis.clauses.length > 0) {
-      await storeClauseEmbeddings(documentId, savedAnalysis.clauses, document.userId);
-    }
-
-    await updateDocumentWithAnalysis(documentId, analysis);
-
     await prisma.document.update({
       where: { id: documentId },
       data: { status: 'COMPLETED' }
     });
 
-    console.log(`✅ Document ${documentId} processed successfully with Pinecone integration`);
+    void (async () => {
+      try {
+        if (savedAnalysis.clauses.length > 0) {
+          await storeClauseEmbeddings(documentId, savedAnalysis.clauses, document.userId);
+        }
+
+        await updateDocumentWithAnalysis(documentId, analysis);
+      } catch (backgroundError) {
+        logger.warn(`Background Pinecone sync failed for ${documentId}:`, backgroundError);
+      }
+    })();
+
+    logger.info(`Document ${documentId} processed successfully with Pinecone integration`);
 
   } catch (error) {
-    console.error(`❌ Error processing document ${documentId}:`, error);
+    logger.error(`Error processing document ${documentId}:`, error);
 
     await prisma.document.update({
       where: { id: documentId },

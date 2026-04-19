@@ -11,6 +11,19 @@ type AuthResponse = {
 
 type DocumentsResponse = {
   documents: Document[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
+  summary?: {
+    totalDocuments: number;
+    analyzedCount: number;
+    elevatedRiskCount: number;
+  };
 };
 
 type DocumentResponse = {
@@ -133,8 +146,13 @@ export const authAPI = {
 
 export const documentsAPI = {
   /** Fetch the current user's document list. */
-  getDocuments: async (): Promise<DocumentsResponse> => {
-    return request<DocumentsResponse>('/documents');
+  getDocuments: async (params?: { page?: number; limit?: number; q?: string }): Promise<DocumentsResponse> => {
+    const query = new URLSearchParams();
+    if (typeof params?.page === 'number') query.set('page', String(params.page));
+    if (typeof params?.limit === 'number') query.set('limit', String(params.limit));
+    if (params?.q) query.set('q', params.q);
+    const path = query.toString() ? `/documents?${query.toString()}` : '/documents';
+    return request<DocumentsResponse>(path);
   },
 
   /** Fetch one document and its attached analysis payload. */

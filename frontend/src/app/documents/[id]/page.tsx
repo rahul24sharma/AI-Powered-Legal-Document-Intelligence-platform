@@ -2,17 +2,19 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   ArrowLeft,
-  FileText,
   Calendar,
   Download,
   AlertTriangle,
   RefreshCw,
+  Printer,
+  CheckCircle2,
 } from 'lucide-react';
 import { documentsAPI } from '@/lib/api';
 import { getAxiosErrorMessage } from '@/lib/api-errors';
@@ -52,6 +54,8 @@ export default function DocumentDetailPage() {
   const documentId = params.id as string;
   const documentStatus = document?.status;
   const hasAnalysis = Boolean(document?.analysis);
+  const isProcessing = documentStatus === 'PROCESSING';
+  const isCompleted = documentStatus === 'COMPLETED' && hasAnalysis;
 
   /** Narrow unknown polling payloads into the lightweight status shape this page expects. */
   const isDocumentStatusPayload = (
@@ -175,26 +179,76 @@ export default function DocumentDetailPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {refreshing && <RefreshCw className="h-4 w-4 animate-spin text-primary" aria-hidden />}
+          {document.status === 'COMPLETED' && document.analysis ? (
+            <Button variant="secondary" size="sm" asChild>
+              <Link href={`/documents/${document.id}/report`} target="_blank" rel="noreferrer">
+                <Printer className="mr-2 h-4 w-4" />
+                Export report
+              </Link>
+            </Button>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => void fetchDocument()}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          {document.status === 'COMPLETED' && document.analysis && (
-            <Button
-              size="sm"
-              variant="secondary"
-              type="button"
-              onClick={() =>
-                window.document
-                  .getElementById('document-analysis')
-                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }
-            >
-              Jump to analysis
-            </Button>
-          )}
         </div>
       </div>
+
+      {isProcessing && (
+        <Card className="border-primary/20 bg-primary/5 shadow-sm">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <RefreshCw className="mt-0.5 h-5 w-5 animate-spin text-primary" />
+              <div className="space-y-1">
+                <p className="font-medium text-primary">Analysis in progress</p>
+                <p className="text-sm text-muted-foreground">
+                  ClaudeIQ is extracting clauses, scoring risk, and preparing the executive summary.
+                  This page will update automatically when the analysis is ready.
+                </p>
+              </div>
+            </div>
+            <Badge variant="secondary" className="w-fit border border-primary/20 bg-white/80 font-normal text-primary">
+              Live processing
+            </Badge>
+          </CardContent>
+        </Card>
+      )}
+
+      {isCompleted && (
+        <Card className="border-emerald-200 bg-emerald-50/80 shadow-sm dark:border-emerald-900/40 dark:bg-emerald-950/20">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <div className="space-y-1">
+                <p className="font-medium text-emerald-700 dark:text-emerald-300">Analysis ready</p>
+                <p className="text-sm text-muted-foreground">
+                  Your document has been reviewed. Jump to the analysis, export the report, or download the source file.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" asChild>
+                <Link href={`/documents/${document.id}/report`} target="_blank" rel="noreferrer">
+                  <Printer className="mr-2 h-4 w-4" />
+                  Export report
+                </Link>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                onClick={() =>
+                  window.document
+                    .getElementById('document-analysis')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }
+              >
+                Jump to analysis
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:gap-8">
         <div className="space-y-6 lg:col-span-2">
@@ -350,22 +404,6 @@ export default function DocumentDetailPage() {
                 <Button variant="outline" className="w-full justify-start" size="sm" disabled>
                   <Download className="mr-2 h-4 w-4" />
                   Download
-                </Button>
-              )}
-              {document.status === 'COMPLETED' && document.analysis && (
-                <Button
-                  className="w-full justify-start"
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() =>
-                    window.document
-                      .getElementById('document-analysis')
-                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                  }
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  View analysis
                 </Button>
               )}
             </CardContent>

@@ -42,6 +42,9 @@ export default function UploadPage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>
+                Single-file uploads open the document automatically once the upload completes.
+              </p>
+              <p>
                 <span className="font-medium text-foreground">Size:</span> Up to 10 MB per file
               </p>
               <p>

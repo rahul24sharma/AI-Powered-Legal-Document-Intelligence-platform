@@ -3,6 +3,7 @@ import pdf from 'pdf-parse';
 import type { Document } from '@prisma/client';
 import { downloadStoredDocument } from './documentStorage';
 import { getRedisClient } from '../lib/redis';
+import { logger } from '../lib/logger';
 
 const memoryTextCache = new Map<string, string>();
 
@@ -19,7 +20,7 @@ async function getCachedDocumentText(cacheKey: string): Promise<string | null> {
       const value = await redisClient.get(cacheKey);
       return value ?? null;
     } catch (error) {
-      console.error('Document text cache read failed:', error);
+      logger.warn('Document text cache read failed:', error);
     }
   }
 
@@ -34,7 +35,7 @@ async function setCachedDocumentText(cacheKey: string, text: string): Promise<vo
       await redisClient.set(cacheKey, text, { PX: 1000 * 60 * 60 });
       return;
     } catch (error) {
-      console.error('Document text cache write failed:', error);
+      logger.warn('Document text cache write failed:', error);
     }
   }
 

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import { prisma } from '../lib/prisma';
+import { logger } from '../lib/logger';
 
 const router = express.Router();
 
@@ -61,7 +62,7 @@ router.post('/register', [
       user
     });
   } catch (error) {
-    console.error('Registration error:', error);
+    logger.error('Registration error:', error);
     res.status(500).json({ message: 'Registration failed' });
   }
 });
@@ -117,7 +118,7 @@ router.post('/login', [
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', error);
     res.status(500).json({ message: 'Login failed' });
   }
 });

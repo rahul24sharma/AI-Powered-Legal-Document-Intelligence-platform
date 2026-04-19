@@ -2,6 +2,7 @@ import 'dotenv/config';
 // backend/src/services/pineconeService.ts
 import { Pinecone } from '@pinecone-database/pinecone';
 import OpenAI from 'openai';
+import { logger } from '../lib/logger';
 
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
@@ -30,10 +31,10 @@ const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 export async function initializePinecone() {
   try {
     const index = pinecone.index(INDEX_NAME);
-    console.log('✅ Pinecone initialized successfully');
+    logger.debug('Pinecone initialized successfully');
     return index;
   } catch (error) {
-    console.error('❌ Failed to initialize Pinecone:', error);
+    logger.error('Failed to initialize Pinecone:', error);
     throw error;
   }
 }
@@ -44,7 +45,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
   try {
     if (EMBEDDING_PROVIDER === 'openai') {
       if (!openai) throw new Error('OPENAI_API_KEY missing');
-      console.log('📊 Creating embedding with OpenAI...');
+      logger.debug('Creating embedding with OpenAI...');
       const response = await openai.embeddings.create({
         model: process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small',
         input,
@@ -54,7 +55,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
     }
 
     if (EMBEDDING_PROVIDER === 'ollama') {
-      console.log(`📊 Creating embedding with Ollama (${OLLAMA_EMBED_MODEL})...`);
+      logger.debug(`Creating embedding with Ollama (${OLLAMA_EMBED_MODEL})...`);
       const res = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -74,12 +75,12 @@ export async function createEmbedding(text: string): Promise<number[]> {
       return normalizeEmbedding(data.embedding, EMBEDDING_DIM);
     }
 
-    console.log('📊 Creating deterministic local embedding...');
+    logger.debug('Creating deterministic local embedding...');
     return deterministicLocalEmbedding(input, EMBEDDING_DIM);
   } catch (error) {
-    console.error('❌ Failed to create embedding:', error);
+    logger.error('Failed to create embedding:', error);
     if (EMBEDDING_PROVIDER !== 'local') {
-      console.log('🔄 Falling back to deterministic local embedding...');
+      logger.debug('Falling back to deterministic local embedding...');
       return deterministicLocalEmbedding(input, EMBEDDING_DIM);
     }
     throw error;
@@ -125,13 +126,14 @@ export async function storeDocumentEmbedding(
     riskScore?: number;
     keyIssues?: string[];
     organizationId?: string;
-  }
+  },
+  options?: { embedding?: number[] }
 ) {
   try {
-    console.log('💾 Storing document embedding in Pinecone...');
+    logger.debug('Storing document embedding in Pinecone...');
     
     const index = await initializePinecone();
-    const embedding = await createEmbedding(documentText);
+    const embedding = options?.embedding ?? await createEmbedding(documentText);
     
     await index.upsert([{
       id: documentId,
@@ -143,9 +145,9 @@ export async function storeDocumentEmbedding(
       }
     }]);
     
-    console.log(`✅ Document ${documentId} stored in Pinecone`);
+    logger.debug(`Document ${documentId} stored in Pinecone`);
   } catch (error) {
-    console.error('❌ Failed to store document embedding:', error);
+    logger.error('Failed to store document embedding:', error);
     // Don't throw - embedding storage is optional
   }
 }
@@ -154,13 +156,14 @@ export async function storeDocumentEmbedding(
 export async function findSimilarDocuments(
   documentText: string,
   userId: string,
-  topK: number = 5
+  topK: number = 5,
+  options?: { embedding?: number[] }
 ) {
   try {
-    console.log('🔍 Finding similar documents...');
+    logger.debug('Finding similar documents...');
 
     const index = await initializePinecone();
-    const embedding = await createEmbedding(documentText);
+    const embedding = options?.embedding ?? await createEmbedding(documentText);
 
     const results = await index.query({
       vector: embedding,
@@ -171,7 +174,7 @@ export async function findSimilarDocuments(
       }
     });
 
-    console.log(`✅ Found ${results.matches?.length || 0} similar documents`);
+    logger.debug(`Found ${results.matches?.length || 0} similar documents`);
 
     return (results.matches || []).map(match => ({
       id: match.id,
@@ -179,7 +182,7 @@ export async function findSimilarDocuments(
       metadata: match.metadata
     }));
   } catch (error: any) {
-    console.error('❌ Failed to find similar documents:', error?.message || error);
+    logger.warn('Failed to find similar documents:', error?.message || error);
     return [];
   }
 }
@@ -193,7 +196,7 @@ export async function findSimilarClauses(
   topK: number = 5
 ) {
   try {
-    console.log('🔍 Finding similar clauses...');
+    logger.debug('Finding similar clauses...');
     
     const index = await initializePinecone();
     const embedding = await createEmbedding(clauseText);
@@ -217,7 +220,7 @@ export async function findSimilarClauses(
       suggestions: match.metadata?.suggestions
     }));
   } catch (error) {
-    console.error('❌ Failed to find similar clauses:', error);
+    logger.warn('Failed to find similar clauses:', error);
     return [];
   }
 }
@@ -229,7 +232,7 @@ export async function storeClauseEmbeddings(
   userId: string
 ) {
   try {
-    console.log('💾 Storing clause embeddings...');
+    logger.debug('Storing clause embeddings...');
     
     const index = await initializePinecone();
     const vectors = [];
@@ -256,10 +259,10 @@ export async function storeClauseEmbeddings(
     
     if (vectors.length > 0) {
       await index.upsert(vectors);
-      console.log(`✅ Stored ${vectors.length} clause embeddings`);
+      logger.debug(`Stored ${vectors.length} clause embeddings`);
     }
   } catch (error) {
-    console.error('❌ Failed to store clause embeddings:', error);
+    logger.error('Failed to store clause embeddings:', error);
   }
 }
 
@@ -290,7 +293,7 @@ export async function updateDocumentWithAnalysis(
   analysis: any
 ) {
   try {
-    console.log('🔄 Updating document with analysis results...');
+    logger.debug('Updating document with analysis results...');
 
     const index = await initializePinecone();
 
@@ -304,8 +307,8 @@ export async function updateDocumentWithAnalysis(
       }
     });
 
-    console.log(`✅ Updated document ${documentId} with analysis`);
+    logger.debug(`Updated document ${documentId} with analysis`);
   } catch (error: any) {
-    console.error('❌ Failed to update document:', error?.message || error);
+    logger.warn('Failed to update document:', error?.message || error);
   }
 }

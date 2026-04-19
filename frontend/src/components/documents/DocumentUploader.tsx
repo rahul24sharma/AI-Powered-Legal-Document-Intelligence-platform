@@ -43,7 +43,7 @@ export function DocumentUploader() {
   const router = useRouter();
 
   /** Upload one file and keep the local queue state in sync with its progress. */
-  const uploadFile = useCallback(async (file: File) => {
+  const uploadFile = useCallback(async (file: File, options?: { autoOpen?: boolean }) => {
     const uploadedFile: UploadedFile = {
       file,
       progress: 0,
@@ -71,6 +71,10 @@ export function DocumentUploader() {
             : f
         )
       );
+
+      if (options?.autoOpen) {
+        router.push(`/documents/${response.document.id}`);
+      }
     } catch (error: unknown) {
       const msg = getAxiosErrorMessage(error, 'Upload failed');
       setUploadedFiles((prev) =>
@@ -79,12 +83,13 @@ export function DocumentUploader() {
     } finally {
       clearInterval(progressInterval);
     }
-  }, []);
+  }, [router]);
 
   /** Validate all selected files and enqueue accepted ones for upload. */
   const handleFiles = useCallback(
     (files: FileList | null) => {
       if (!files) return;
+      const autoOpen = files.length === 1;
 
       Array.from(files).forEach((file) => {
         const err = validateUploadFile(file);
@@ -99,7 +104,7 @@ export function DocumentUploader() {
             },
           ]);
         } else {
-          void uploadFile(file);
+          void uploadFile(file, { autoOpen });
         }
       });
     },

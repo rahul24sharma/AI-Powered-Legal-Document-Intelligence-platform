@@ -6,6 +6,7 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { prisma } from '../lib/prisma';
 import { deleteStoredDocument, saveUploadedDocument } from '../services/documentStorage';
 import { enqueueDocumentProcessing } from '../services/documentProcessingQueue';
+import { logger } from '../lib/logger';
 
 const router = express.Router();
 
@@ -97,7 +98,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response): Pro
       }
     });
   } catch (error) {
-    console.error('Upload error:', error);
+    logger.error('Upload error:', error);
 
     if (error instanceof multer.MulterError) {
       res.status(400).json({ message: getUploadErrorMessage(error) });
@@ -113,7 +114,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response): Pro
       try {
         await prisma.document.delete({ where: { id: documentId } });
       } catch (cleanupError) {
-        console.error('Upload DB cleanup error:', cleanupError);
+        logger.warn('Upload DB cleanup error:', cleanupError);
       }
     }
 
@@ -124,7 +125,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response): Pro
           fileUrl: storedFile.fileUrl,
         });
       } catch (cleanupError) {
-        console.error('Upload cleanup error:', cleanupError);
+        logger.warn('Upload cleanup error:', cleanupError);
       }
     }
 
